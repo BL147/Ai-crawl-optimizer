@@ -51,15 +51,20 @@ class CrawlerEngine:
 
         try:
             async with async_playwright() as p:
-                browser: Browser = await p.chromium.launch(
-                    headless=self.headless,
-                    args=[
+                launch_kwargs = {
+                    "headless": self.headless,
+                    "args": [
                         "--no-sandbox",
                         "--disable-setuid-sandbox",
                         "--disable-dev-shm-usage",
                         "--disable-blink-features=AutomationControlled",
                     ],
-                )
+                }
+                try:
+                    browser: Browser = await p.chromium.launch(**launch_kwargs)
+                except Exception:
+                    # Fallback to locally installed Google Chrome channel if standalone chromium is missing
+                    browser = await p.chromium.launch(channel="chrome", **launch_kwargs)
 
                 # Configure context with persona's user agent and headers
                 context: BrowserContext = await browser.new_context(
@@ -76,7 +81,14 @@ class CrawlerEngine:
                     if request.is_navigation_request() and request.redirected_from:
                         redirects.append(request.redirected_from.url)
 
-                page.on("request", on_request)
+                last_response: Optional[Response] = None
+
+                def on_response(res):
+                    nonlocal last_response
+                    if res.request.is_navigation_request():
+                        last_response = res
+
+                page.on("response", on_response)
 
                 # Navigate
                 try:
@@ -85,6 +97,7 @@ class CrawlerEngine:
                         wait_until="domcontentloaded",
                         timeout=int(timeout_seconds * 1000),
                     )
+                    active_response = response or last_response
 
                     # Give scripts, redirects, and potential challenge challenges a moment to render
                     if wait_after_load_ms > 0:
@@ -92,11 +105,11 @@ class CrawlerEngine:
 
                     elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
 
-                    if response:
-                        status_code = response.status
-                        response_headers = response.headers
+                    if active_response:
+                        status_code = active_response.status
+                        response_headers = active_response.headers
                         content_type = response_headers.get("content-type")
-                        final_url = response.url
+                        final_url = active_response.url
                     else:
                         final_url = page.url
 
@@ -149,13 +162,41 @@ class CrawlerEngine:
                     )
 
                 except PlaywrightError as pe:
-                    success = False
                     error_message = str(pe)
                     elapsed_ms = round((time.perf_counter() - start_time) * 1000, 2)
+
+                    # Extract status code if available from last_response
+                    if last_response:
+                        status_code = last_response.status
+                        response_headers = last_response.headers
+                        final_url = last_response.url
+                    else:
+                        final_url = url
+
                     http_obs = HttpObservation(
-                        final_url=url,
+                        status_code=status_code,
+                        final_url=final_url,
+                        headers=response_headers,
                         response_time_ms=elapsed_ms,
+                        server=response_headers.get("server"),
+                        x_robots_tag=response_headers.get("x-robots-tag"),
                     )
+
+                    # If the failure is an HTTP response error (like 403 or 429), attempt to read page content
+                    try:
+                        title = await page.title()
+                        html_content = await page.content()
+                        body_text = await page.evaluate("() => document.body ? document.body.innerText : ''")
+                        cleaned_text = " ".join((body_text or "").split())
+                        page_obs = PageObservation(
+                            title=title,
+                            text_length=len(cleaned_text),
+                            snippet=cleaned_text[:1000],
+                        )
+                    except Exception:
+                        pass
+
+                    success = status_code is not None and status_code < 400
 
                 finally:
                     await context.close()

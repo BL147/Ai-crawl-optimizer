@@ -56,7 +56,6 @@ def crawl_sync(
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # If called inside an existing event loop (e.g. some Streamlit contexts), run in a separate thread
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                 return pool.submit(
@@ -70,6 +69,62 @@ def crawl_sync(
     except RuntimeError:
         return asyncio.run(
             crawl_url(url, persona, headless, timeout_seconds, wait_after_load_ms)
+        )
+
+
+def crawl_all_sync(
+    url: str,
+    personas: Optional[List[str]] = None,
+    headless: bool = True,
+    timeout_seconds: float = 12.0,
+) -> List[Dict[str, Any]]:
+    """
+    Synchronous wrapper for crawl_all_personas.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(
+                    asyncio.run,
+                    crawl_all_personas(url, personas, headless, timeout_seconds),
+                ).result()
+        else:
+            return loop.run_until_complete(
+                crawl_all_personas(url, personas, headless, timeout_seconds)
+            )
+    except RuntimeError:
+        return asyncio.run(
+            crawl_all_personas(url, personas, headless, timeout_seconds)
+        )
+
+
+def crawl_with_baseline_sync(
+    url: str,
+    persona: str = "gptbot",
+    headless: bool = True,
+    timeout_seconds: float = 12.0,
+) -> Dict[str, Any]:
+    """
+    Synchronous wrapper for crawl_with_baseline.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(
+                    asyncio.run,
+                    crawl_with_baseline(url, persona, headless, timeout_seconds),
+                ).result()
+        else:
+            return loop.run_until_complete(
+                crawl_with_baseline(url, persona, headless, timeout_seconds)
+            )
+    except RuntimeError:
+        return asyncio.run(
+            crawl_with_baseline(url, persona, headless, timeout_seconds)
         )
 
 
@@ -128,8 +183,10 @@ async def crawl_with_baseline(
 __all__ = [
     "crawl_url",
     "crawl_sync",
+    "crawl_all_sync",
     "crawl_all_personas",
     "crawl_with_baseline",
+    "crawl_with_baseline_sync",
     "list_personas",
     "get_persona",
     "CrawlerEngine",
