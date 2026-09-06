@@ -1,118 +1,91 @@
 """
-ai_advisor.py - AI Diagnosis & WAF Remediation Module
-Author: S (AI Specialist) & System Integrator
+ai_advisor.py - AI Diagnosis & Remediation Adapter
+Author: System Integrator & Kavish (AI Specialist)
 
-Generates root-cause analysis and automated WAF/robots.txt rules
-using Google Gemini or OpenAI LLMs, with instant rule-based fallback.
+Integrates Kavish's authoritative remediation package (remediation/)
+into the unified audit architecture.
 """
 
 import os
 from typing import Dict, Any, List
+from remediation import generate_remediation as kavish_generate_remediation
+
 
 def generate_recommendations(scoring_result: Dict[str, Any], audit_context: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Analyzes audit penalties and generates actionable AI search crawl fixes.
-    
-    Parameters:
-        scoring_result: Dict with score, grade, status, and penalties list
-        audit_context: Dict with browser, bots, and robots_txt crawl data
-    
-    Returns:
-        Dict with root_cause, cloudflare_waf_rule, robots_txt_fix, and action_items
+    Adapter function that invokes Kavish's Gemini remediation engine
+    and maps the structured output for backward compatibility.
     """
-    score = scoring_result.get("score", 100)
-    penalties = scoring_result.get("penalties", [])
+    gptbot_info = audit_context.get("bots", {}).get("gpt_bot", {})
+    target_url = audit_context.get("url", "https://target-website.com")
+    robots_data = audit_context.get("robots_txt", {})
+    waf_detected = audit_context.get("waf_detected") or gptbot_info.get("waf")
+    status_code = gptbot_info.get("status", 200)
+    is_blocked = gptbot_info.get("blocked", False) or (status_code in [401, 403, 429])
 
-    # Check for Gemini / OpenAI API Keys
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    openai_key = os.getenv("OPENAI_API_KEY")
-
-    # If an API key is available, an LLM call can be performed here:
-    if gemini_key:
-        try:
-            # S can implement direct Gemini API calls here
-            pass
-        except Exception:
-            pass
-
-    # Built-in High Quality Synthesis
-    root_causes = []
-    action_items = []
-
-    has_waf_block = any("Anti-Bot" in p.get("factor", "") or "403" in p.get("factor", "") for p in penalties)
-    has_robots_block = any("Robots.txt" in p.get("factor", "") for p in penalties)
-    has_captcha = any("CAPTCHA" in p.get("factor", "") for p in penalties)
-
-    if has_waf_block or has_captcha:
-        root_causes.append("Cloudflare WAF / Bot Management rules treat AI search engines as unauthorized scrapers, returning 403 Forbidden challenges.")
-        action_items.append("Create a Cloudflare Custom WAF Rule with action 'Skip' or 'Allow' for verified AI crawlers.")
-
-    if has_robots_block:
-        root_causes.append("The robots.txt file contains explicit Disallow directives blocking GPTBot, ClaudeBot, or PerplexityBot.")
-        action_items.append("Update robots.txt with explicit 'Allow: /' directives for generative search agents.")
-
-    if not root_causes:
-        root_causes.append("Website is currently accessible to generative AI search engines without active blocks.")
-        action_items.append("Monitor crawl latency and maintain structured semantic markup for generative summaries.")
-
-    cloudflare_waf_rule = (
-        '(http.user_agent contains "GPTBot" or '
-        'http.user_agent contains "ClaudeBot" or '
-        'http.user_agent contains "PerplexityBot") and '
-        'not cf.client.bot'
-    )
-
-    robots_txt_fix = """# AI Search Crawler Directives (Optimized)
-User-agent: GPTBot
-Allow: /
-
-User-agent: ClaudeBot
-Allow: /
-
-User-agent: PerplexityBot
-Allow: /
-
-# Standard crawlers
-User-agent: *
-Allow: /
-"""
-
-    return {
-        "root_cause": " ".join(root_causes),
-        "cloudflare_waf_rule": cloudflare_waf_rule,
-        "robots_txt_fix": robots_txt_fix,
-        "action_items": action_items
+    crawler_payload = {
+        "target_url": target_url,
+        "persona": "gptbot",
+        "http": {
+            "status_code": status_code,
+            "headers": gptbot_info.get("headers", {}),
+            "server": "cloudflare" if waf_detected == "Cloudflare" else None,
+            "response_time_ms": gptbot_info.get("latency_ms", 0),
+        },
+        "robots_txt": {
+            "exists": robots_data.get("status") == 200,
+            "is_allowed": not robots_data.get("ai_disallowed", False),
+            "matching_rule": "Disallow: /" if robots_data.get("ai_disallowed") else "Allow: /",
+        },
+        "detection": {
+            "is_blocked": is_blocked,
+            "evidence": {
+                "status_code": status_code,
+                "matched_headers": ["server: cloudflare"] if waf_detected == "Cloudflare" else [],
+                "dom_signals": [".cf-turnstile"] if gptbot_info.get("captcha") else [],
+            },
+            "inference": {
+                "verdict": "CHALLENGED" if (waf_detected or gptbot_info.get("captcha")) else ("BLOCKED" if is_blocked else "ACCESSIBLE"),
+                "mechanism": "CLOUDFLARE_CHALLENGE" if waf_detected == "Cloudflare" else ("NONE" if not is_blocked else "HTTP_FORBIDDEN"),
+                "confidence": 0.95 if is_blocked else 0.0,
+            },
+        },
     }
+
+    try:
+        rem = kavish_generate_remediation(crawler_payload)
+        code_change = rem.get("code_or_configuration_change", "")
+        if not code_change:
+            code_change = '(http.user_agent contains "GPTBot" or http.user_agent contains "ClaudeBot") and not cf.client.bot'
+
+        return {
+            "root_cause": f"{rem.get('problem_detected', '')} - {rem.get('why_it_affects_ai_crawling', '')}".strip(" -"),
+            "cloudflare_waf_rule": code_change,
+            "robots_txt_fix": "User-agent: GPTBot\nAllow: /\n\nUser-agent: ClaudeBot\nAllow: /\n\nUser-agent: *\nAllow: /\n",
+            "action_items": rem.get("validation_steps") or [rem.get("recommended_fix", "Configure edge WAF to allow AI search crawlers.")],
+            "remediation_details": rem,
+        }
+    except Exception as exc:
+        # Fallback if remediation encounter an error
+        return {
+            "root_cause": "Cloudflare WAF / Anti-bot rules classify generative AI search agents as untrusted scrapers.",
+            "cloudflare_waf_rule": '(http.user_agent contains "GPTBot" or http.user_agent contains "ClaudeBot") and not cf.client.bot',
+            "robots_txt_fix": "User-agent: GPTBot\nAllow: /\n\nUser-agent: ClaudeBot\nAllow: /\n\nUser-agent: *\nAllow: /\n",
+            "action_items": ["Create a Cloudflare WAF Custom Rule with action 'Skip' for verified AI search user agents."],
+            "error": str(exc),
+        }
 
 
 if __name__ == "__main__":
-    import json
-    # Sample mock scoring input
-    sample_scoring = {
-        "score": 25,
-        "grade": "F",
-        "status": "AI CRAWL BLOCKED",
-        "penalties": [
-            {"factor": "HTTP 403 Forbidden", "category": "HTTP Status", "penalty": -25},
-            {"factor": "Anti-Bot Shield Challenge (Cloudflare)", "category": "Anti-Bot & WAF", "penalty": -25},
-            {"factor": "Robots.txt AI Crawl Disallow", "category": "Robots.txt Policy", "penalty": -15}
-        ]
+    mock_scoring = {"score": 25, "grade": "F", "penalties": [{"factor": "HTTP 403 Forbidden"}]}
+    mock_context = {
+        "url": "http://127.0.0.1:5050",
+        "bots": {"gpt_bot": {"status": 403, "blocked": True, "waf": "Cloudflare", "captcha": True}},
+        "robots_txt": {"status": 200, "ai_disallowed": True},
+        "waf_detected": "Cloudflare",
     }
-    sample_context = {
-        "browser": {"status": 200},
-        "bots": {"gpt_bot": {"status": 403, "blocked": True}},
-        "robots_txt": {"ai_disallowed": True}
-    }
-
-    print("=== RUNNING AI ADVISOR TEST ===")
-    rec = generate_recommendations(sample_scoring, sample_context)
-    print("\n[ROOT CAUSE]:")
-    print(rec["root_cause"])
-    print("\n[CLOUDFLARE WAF RULE]:")
-    print(rec["cloudflare_waf_rule"])
-    print("\n[ROBOTS.TXT FIX]:")
-    print(rec["robots_txt_fix"])
-    print("[ACTION ITEMS]:")
-    for item in rec["action_items"]:
-        print(f" - {item}")
-
+    rec = generate_recommendations(mock_scoring, mock_context)
+    print("=== AI ADVISOR TEST RESULT (VIA KAVISH REMEDIATION) ===")
+    print("Root Cause:", rec["root_cause"])
+    print("Cloudflare Rule:\n", rec["cloudflare_waf_rule"])
+    print("Validation Steps:", rec["action_items"])
