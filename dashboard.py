@@ -3,63 +3,129 @@ import time
 from urllib.parse import urlparse
 import pandas as pd
 
-from crawler import crawl_sync, crawl_all_sync, crawl_with_baseline_sync, list_personas
-from remediation import generate_remediation
-from sandbox.server import start_sandbox, set_mode, get_mode
+from crawler import list_personas
+from orchestration import run_audit
 
 # Page configuration
 st.set_page_config(
     page_title="AI Accessibility Auditor",
     page_icon="🤖",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    layout="wide"
 )
 
 # Custom Styling
+import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# Custom Styling - Modern Glassmorphism & High Contrast Dark Theme
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    /* Gradient Header */
+    .hero-container {
+        background: radial-gradient(circle at 15% 20%, rgba(59, 130, 246, 0.15) 0%, transparent 40%),
+                    radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.12) 0%, transparent 40%),
+                    linear-gradient(180deg, rgba(15, 23, 42, 0.7) 0%, rgba(15, 23, 42, 0.2) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 20px;
+        padding: 2.2rem 2.5rem;
+        margin-bottom: 2rem;
+        backdrop-filter: blur(12px);
+    }
     .main-title {
-        font-size: 2.3rem;
+        font-size: 2.4rem;
         font-weight: 800;
-        margin-bottom: 0.2rem;
+        background: linear-gradient(135deg, #FFFFFF 20%, #94A3B8 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.4rem;
+        letter-spacing: -0.03em;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
     }
     .sub-title {
-        font-size: 1rem;
-        opacity: 0.75;
-        margin-bottom: 1.5rem;
+        font-size: 1.05rem;
+        color: #94A3B8;
+        margin-bottom: 1.2rem;
+        line-height: 1.5;
     }
+    
+    .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.35rem 0.9rem;
+        border-radius: 9999px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+    .status-pill-active {
+        background: rgba(16, 185, 129, 0.12);
+        color: #34D399;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    .status-pill-fallback {
+        background: rgba(245, 158, 11, 0.12);
+        color: #FBBF24;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+
+    /* Cards */
     .score-card {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        border-radius: 16px;
-        padding: 2rem;
+        background: linear-gradient(145deg, #131E33 0%, #0B132B 100%);
+        border: 1px solid rgba(59, 130, 246, 0.25);
+        border-radius: 20px;
+        padding: 2.2rem 1.8rem;
         text-align: center;
         color: white;
-        margin: 1.2rem 0;
-        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15);
+        margin: 0.5rem 0;
+        box-shadow: 0 20px 35px -10px rgba(0, 0, 0, 0.45);
+        position: relative;
+        overflow: hidden;
+    }
+    .score-card::before {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0; height: 3px;
+        background: linear-gradient(90deg, #3B82F6, #8B5CF6, #EC4899);
     }
     .score-label {
-        font-size: 0.95rem;
-        letter-spacing: 0.12em;
-        font-weight: 600;
+        font-size: 0.85rem;
+        letter-spacing: 0.14em;
+        font-weight: 700;
         text-transform: uppercase;
         color: #94A3B8;
         margin-bottom: 0.5rem;
     }
     .score-num {
-        font-size: 4.5rem;
+        font-size: 4.6rem;
         font-weight: 900;
         line-height: 1;
-        letter-spacing: -0.04em;
+        letter-spacing: -0.05em;
+        background: linear-gradient(180deg, #FFFFFF 30%, #CBD5E1 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
     .score-denom {
-        font-size: 1.4rem;
+        font-size: 1.25rem;
         color: #64748B;
         font-weight: 600;
-        margin-bottom: 0.8rem;
+        margin-bottom: 1rem;
     }
     .risk-badge {
         display: inline-block;
-        padding: 0.35rem 1.2rem;
+        padding: 0.4rem 1.4rem;
         border-radius: 9999px;
         font-size: 0.85rem;
         font-weight: 800;
@@ -67,118 +133,136 @@ st.markdown("""
         text-transform: uppercase;
     }
     .risk-high {
-        background-color: rgba(239, 68, 68, 0.2);
+        background-color: rgba(239, 68, 68, 0.18);
         color: #F87171;
         border: 1px solid #EF4444;
     }
     .risk-medium {
-        background-color: rgba(245, 158, 11, 0.2);
+        background-color: rgba(245, 158, 11, 0.18);
         color: #FBBF24;
         border: 1px solid #F59E0B;
     }
     .risk-low {
-        background-color: rgba(34, 197, 94, 0.2);
+        background-color: rgba(34, 197, 94, 0.18);
         color: #4ADE80;
         border: 1px solid #22C55E;
     }
+    
     .results-card {
-        background-color: #1E293B;
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 1.2rem 1.5rem;
+        background: linear-gradient(145deg, #131E33 0%, #0E172A 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px;
+        padding: 1.4rem 1.6rem;
         margin-top: 0.5rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
     }
     .result-item {
-        font-size: 1.05rem;
-        color: #F1F5F9 !important;
-        padding: 0.35rem 0;
+        font-size: 1.02rem;
+        color: #E2E8F0 !important;
+        padding: 0.5rem 0;
         display: flex;
         align-items: center;
-        gap: 0.6rem;
+        gap: 0.85rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     }
-    .status-pass { color: #4ADE80 !important; font-weight: 800; font-size: 1.15rem; }
-    .status-fail { color: #F87171 !important; font-weight: 800; font-size: 1.15rem; }
-    .status-warn { color: #FBBF24 !important; font-weight: 800; font-size: 1.15rem; }
+    .result-item:last-child {
+        border-bottom: none;
+    }
+    .status-pass { color: #34D399 !important; font-weight: 800; font-size: 1.25rem; }
+    .status-fail { color: #F87171 !important; font-weight: 800; font-size: 1.25rem; }
+    .status-warn { color: #FBBF24 !important; font-weight: 800; font-size: 1.25rem; }
+    
+    /* Audit Form Styling */
+    div[data-testid="stForm"] {
+        background: rgba(19, 30, 51, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px;
+        padding: 1.8rem;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.25);
+    }
+
+    /* Remediation Callout Card */
+    .remediation-box {
+        background: linear-gradient(145deg, #101B2E 0%, #090F1E 100%);
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        border-radius: 18px;
+        padding: 2rem 2.2rem;
+        margin-top: 1rem;
+        box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.4);
+    }
+    .remediation-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        background: rgba(99, 102, 241, 0.15);
+        border: 1px solid rgba(99, 102, 241, 0.4);
+        color: #A5B4FC;
+        border-radius: 9999px;
+        padding: 0.35rem 1rem;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-import os
-from dotenv import load_dotenv
+# Environment API Key Detection Check (No sidebar key input)
+has_env_key = bool(os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY"))
 
-load_dotenv()
-
-# Start Sandbox Server for live demo switching
-sandbox_url = start_sandbox(port=5050)
-
-# Sidebar: Controls & API Key Configuration
+# Clean Sidebar: Information & Guidance Only (No API key bar)
 with st.sidebar:
-    st.title("⚡ Settings & Controls")
-    
-    st.markdown("### 🔑 Gemini AI Key")
-    env_key = os.getenv("GEMINI_API_KEY", "")
-    gemini_key_input = st.text_input(
-        "Enter Gemini API Key:",
-        value=env_key,
-        type="password",
-        help="Optional: Powers AI-synthesized remediation and custom code fixes. If empty, the engine uses strict deterministic rule-based remediation."
-    )
-    if gemini_key_input:
-        st.success("✅ Gemini AI synthesis enabled")
+    st.markdown("### 🤖 System Configuration")
+    if has_env_key:
+        st.markdown("""
+        <div style="background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.35); border-radius: 12px; padding: 1rem; color: #34D399;">
+            <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 0.3rem;">✓ LLM Engine Configured</div>
+            <div style="font-size: 0.8rem; color: #A7F3D0; line-height: 1.4;">
+                API key detected from <code>.env</code> file. Generative remediation and AI synthesis are fully enabled.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.caption("ℹ️ Running in deterministic rule-based mode (No key required)")
+        st.markdown("""
+        <div style="background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.35); border-radius: 12px; padding: 1rem; color: #FBBF24;">
+            <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 0.3rem;">ℹ️ Deterministic Grounded Engine</div>
+            <div style="font-size: 0.8rem; color: #FDE68A; line-height: 1.4;">
+                To enable Gemini AI reasoning, add your API key to <code>.env</code>:<br>
+                <code>GEMINI_API_KEY=your_key_here</code>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
 
-    st.divider()
-    st.markdown("### 🛠️ Demo Sandbox Control")
-    st.caption("Demonstrate **BEFORE** (403 Blocked) vs **AFTER** (200 Optimized) live during pitches.")
-    
-    current_mode = get_mode()
-    if current_mode == "before":
-        st.error("Sandbox: **BEFORE Mode** (Simulated AI Block 403)")
-    else:
-        st.success("Sandbox: **AFTER Mode** (Optimized 200 OK)")
+    st.markdown("---")
+    st.markdown("#### 🎯 Supported AI Crawlers")
+    st.caption("• **OpenAI GPTBot** (ChatGPT Search & Retrieval)\n• **Anthropic ClaudeBot** (Claude Web Indexer)\n• **PerplexityBot** (Realtime AI Answer Engine)\n• **ByteSpider** (Douyin / TikTok AI Bot)\n• **Google-Extended** (Bard / Gemini Web Training)")
+    st.markdown("---")
+    st.caption("AI Crawl Optimizer v2.5 • Zero-Hallucination Grounded Remediation")
 
-    col_btn1, col_btn2 = st.columns(2)
-    with col_btn1:
-        if st.button("🔴 Set BEFORE", use_container_width=True):
-            set_mode("before")
-            st.rerun()
-    with col_btn2:
-        if st.button("🟢 Set AFTER", use_container_width=True):
-            set_mode("after")
-            st.rerun()
+# App Hero Banner
+engine_pill = '<span class="status-pill status-pill-active">⚡ Gemini 2.5 Generative Fix Active</span>' if has_env_key else '<span class="status-pill status-pill-fallback">🛡️ Grounded Remediation Active (.env key optional)</span>'
 
-    st.caption(f"Sandbox Server running on: `{sandbox_url}`")
-    st.divider()
-    st.markdown("### 🎯 Quick Presets")
-    quick_choice = st.selectbox(
-        "Load URL Preset:",
-        ["None", "Demo Sandbox", "https://example.com", "https://wikipedia.org"],
-        index=0
-    )
-
-# App Header
-st.markdown('<div class="main-title">AI Accessibility Auditor</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Multi-Persona AI Crawler Compatibility, WAF Challenge, & Bot Management Auditor</div>', unsafe_allow_html=True)
+st.markdown(f"""
+<div class="hero-container">
+    <div class="main-title">🌐 AI Accessibility & Bot Optimizer</div>
+    <div class="sub-title">Audit multi-persona AI crawler compatibility, detect edge WAF challenges, and generate instant, production-ready code fixes.</div>
+    {engine_pill}
+</div>
+""", unsafe_allow_html=True)
 
 # Controls & Form
 available_personas = list_personas()
 ai_persona_keys = [p["id"] for p in available_personas if p["is_ai_agent"]]
 
-initial_url = ""
-if quick_choice == "Demo Sandbox":
-    initial_url = sandbox_url
-elif quick_choice != "None":
-    initial_url = quick_choice
-
 with st.form("audit_form"):
     col1, col2 = st.columns([2.5, 1.5])
     with col1:
         url_input = st.text_input(
-            "Enter website:",
-            value=initial_url,
+            "Target Website URL:",
             placeholder="https://example.com",
-            help="Provide the target domain or URL"
+            help="Enter target website or domain to audit for AI crawler accessibility"
         )
     with col2:
         audit_mode = st.radio(
@@ -200,8 +284,8 @@ with st.form("audit_form"):
     else:
         selected_personas = ["gptbot", "claudebot", "perplexitybot", "bytespider", "google_extended"]
 
-    include_baseline = st.checkbox("Compare against standard Desktop Chrome baseline (to prove selective AI blocking)", value=True)
-    submit_button = st.form_submit_button("START AUDIT", type="primary", use_container_width=True)
+    include_baseline = st.checkbox("Compare against standard Desktop Chrome baseline (to verify selective AI blocking)", value=True)
+    submit_button = st.form_submit_button("🚀 START AUDIT", type="primary", use_container_width=True)
 
 def normalize_url(url: str) -> str:
     url = url.strip()
@@ -211,42 +295,27 @@ def normalize_url(url: str) -> str:
         url = "https://" + url
     return url
 
-def compute_score_and_risk(crawl_res: dict):
-    http_data = crawl_res.get("http", {})
-    robots_data = crawl_res.get("robots_txt", {})
-    detection = crawl_res.get("detection", {})
-    inference = detection.get("inference", {})
 
-    status_code = http_data.get("status_code")
-    is_blocked = detection.get("is_blocked", False)
-    mechanism = str(inference.get("mechanism", "NONE")).upper()
-    is_allowed_robots = robots_data.get("is_allowed", True)
-    robots_exists = robots_data.get("exists", False)
-
-    score = 100
-
-    if not crawl_res.get("success") and status_code is None:
-        return 0, "HIGH RISK", "risk-high"
-
-    if is_blocked:
-        score -= 35
-    if status_code in [403, 401]:
-        score -= 20
-    elif status_code in [429, 503]:
-        score -= 15
-    if mechanism not in ["NONE", "HTTP_FORBIDDEN", "INCONCLUSIVE", ""]:
-        score -= 20
-    if robots_exists and not is_allowed_robots:
-        score -= 25
-
-    score = max(5, min(score, 100))
-
-    if score < 50:
-        return score, "HIGH RISK", "risk-high"
-    elif score < 75:
-        return score, "MEDIUM RISK", "risk-medium"
+def render_remediation(advice: dict) -> None:
+    if advice.get("model_used"):
+        st.markdown(
+            '<div class="remediation-badge">✨ Generated by Gemini AI Reasoning Engine</div>',
+            unsafe_allow_html=True,
+        )
     else:
-        return score, "LOW RISK", "risk-low"
+        st.markdown(
+            '<div class="remediation-badge" style="background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); color: #93C5FD;">🛡️ Deterministic Grounded Engine (RFC 9309 & WAF Spec)</div>',
+            unsafe_allow_html=True,
+        )
+        if advice.get("uncertainty"):
+            st.info(f"ℹ️ {advice['uncertainty']}")
+
+    st.markdown(
+        f'<div class="remediation-box"><strong>Problem:</strong> {advice.get("problem_detected", "No remediation required.")}<br><br><strong>Recommendation:</strong> {advice.get("recommended_fix", "")}</div>',
+        unsafe_allow_html=True,
+    )
+    if advice.get("code_or_configuration_change"):
+        st.code(advice["code_or_configuration_change"])
 
 # Run Audit Flow
 if submit_button:
@@ -275,25 +344,35 @@ if submit_button:
                 status_placeholder.markdown("\n\n".join(rendered))
                 time.sleep(0.2)
 
-        # Execution
-        target_list = list(selected_personas)
-        if include_baseline and "standard_browser" not in target_list:
-            target_list.append("standard_browser")
-
-        with st.spinner(f"Simulating {len(target_list)} personas via Chromium engine..."):
+        # Execute through the finalized crawler, scoring, and remediation pipeline.
+        with st.spinner(f"Auditing {len(selected_personas)} personas via Chromium engine..."):
             try:
-                results = crawl_all_sync(norm_url, personas=target_list, headless=True, timeout_seconds=12.0)
+                results = [
+                    run_audit(
+                        norm_url,
+                        persona=persona,
+                        include_baseline=include_baseline,
+                        headless=True,
+                        timeout_seconds=12.0,
+                    )
+                    for persona in selected_personas
+                ]
             except Exception as e:
                 st.error(f"Audit failed to execute: {str(e)}")
                 st.stop()
 
         # Isolate results
-        ai_results = [r for r in results if r.get("persona") != "standard_browser"]
-        baseline_result = next((r for r in results if r.get("persona") == "standard_browser"), None)
+        ai_results = results
+        primary_res = ai_results[0]
+        baseline_result = primary_res.get("baseline")
 
-        # Compute aggregate or primary score
-        primary_res = ai_results[0] if ai_results else results[0]
-        score, risk_label, risk_class = compute_score_and_risk(primary_res)
+        score = primary_res.get("summary", {}).get("score", 0)
+        risk_label = primary_res.get("summary", {}).get("risk_level", "HIGH RISK")
+        risk_class = {
+            "HIGH RISK": "risk-high",
+            "MEDIUM RISK": "risk-medium",
+            "LOW RISK": "risk-low",
+        }.get(risk_label, "risk-high")
 
         # Top Display: Score & Quick Detection Checklist
         top_col1, top_col2 = st.columns([1.2, 1.8])
@@ -319,7 +398,9 @@ if submit_button:
             mechanism = str(inference.get("mechanism", "NONE")).upper()
             robots_exists = robots_data.get("exists", False)
             robots_allowed = robots_data.get("is_allowed", True)
+            verdict = str(inference.get("verdict", "ACCESSIBLE")).upper()
             is_challenge = mechanism not in ["NONE", "HTTP_FORBIDDEN", "INCONCLUSIVE", ""]
+            confirmed_block = is_blocked or verdict == "BLOCKED"
 
             reachable = primary_res.get("success") or (status_code is not None)
             reachable_icon = "✓" if reachable else "✗"
@@ -330,9 +411,9 @@ if submit_button:
             robots_class = "status-pass" if robots_exists else "status-fail"
             robots_text = "robots.txt found" if robots_exists else "robots.txt not found"
 
-            ai_icon = "✗" if (is_blocked or not robots_allowed or status_code in [403, 401]) else "✓"
-            ai_class = "status-fail" if (is_blocked or not robots_allowed or status_code in [403, 401]) else "status-pass"
-            ai_text = "AI crawler blocked" if (is_blocked or not robots_allowed or status_code in [403, 401]) else "AI crawler allowed"
+            ai_icon = "✗" if (confirmed_block or not robots_allowed) else "✓"
+            ai_class = "status-fail" if (confirmed_block or not robots_allowed) else "status-pass"
+            ai_text = "AI crawler blocked" if (confirmed_block or not robots_allowed) else "AI crawler allowed"
 
             if status_code == 200:
                 http_icon = "✓"
@@ -371,9 +452,12 @@ if submit_button:
         st.caption("Cross-audit comparing major AI assistants against a standard desktop Chrome browser baseline.")
 
         matrix_rows = []
-        for r in results:
+        matrix_results = list(results)
+        if baseline_result:
+            matrix_results.append(baseline_result)
+        for r in matrix_results:
             p_id = r.get("persona")
-            p_name = next((p["display_name"] for p in available_personas if p["id"] == p_id), p_id)
+            p_name = next((p["display_name"] for p in available_personas if p["id"] == p_id), p_id or "Standard Chrome")
             r_http = r.get("http", {})
             r_robots = r.get("robots_txt", {})
             r_det = r.get("detection", {})
@@ -386,7 +470,8 @@ if submit_button:
             allowed_txt = "✅ Allowed" if r_robots.get("is_allowed", True) else "❌ Disallowed"
             
             # Status icon
-            if is_b or st_code in [403, 401]:
+            row_verdict = str(r_inf.get("verdict", "ACCESSIBLE")).upper()
+            if is_b or row_verdict == "BLOCKED":
                 access_status = f"❌ Blocked ({st_code or 'Denied'})"
             elif st_code == 200:
                 access_status = "✅ Accessible (200 OK)"
@@ -409,7 +494,7 @@ if submit_button:
         if baseline_result and ai_results:
             base_status = baseline_result.get("http", {}).get("status_code")
             ai_blocked_any = any(
-                r.get("detection", {}).get("is_blocked") or r.get("http", {}).get("status_code") in [403, 401]
+                r.get("detection", {}).get("is_blocked") or r.get("detection", {}).get("inference", {}).get("verdict") == "BLOCKED"
                 for r in ai_results
             )
             if base_status == 200 and ai_blocked_any:
@@ -417,47 +502,9 @@ if submit_button:
             elif base_status == 200 and not ai_blocked_any:
                 st.success("✅ **Consistent Access**: Both AI assistants and human browsers have unimpeded access.")
 
-        # Senior Remediation Engine (Gemini AI + Rule-based Engine)
+        # Senior Remediation Engine
         st.write("---")
-        st.markdown("### 🛠️ AI Remediation & Fix Plan")
-        
-        active_key = gemini_key_input.strip() if gemini_key_input else None
-        advice = generate_remediation(primary_res, api_key=active_key)
-        
-        st.markdown("#### 🔍 Problem Detected")
-        st.error(advice.get("problem_detected", "Unknown Issue"))
-        
-        if advice.get("evidence"):
-            st.markdown("**Observed Evidence:**")
-            for ev in advice["evidence"]:
-                st.markdown(f"- `{ev}`")
-                
-        if advice.get("why_it_affects_ai_crawling"):
-            st.markdown("**Why It Affects AI Crawling:**")
-            st.write(advice["why_it_affects_ai_crawling"])
-            
-        if advice.get("recommended_fix"):
-            st.markdown("**Recommended Fix:**")
-            st.info(advice["recommended_fix"])
-            
-        if advice.get("code_or_configuration_change"):
-            st.markdown("**Exact Configuration / Code Change:**")
-            st.code(advice["code_or_configuration_change"], language="plaintext")
-            
-        ba = advice.get("before_after_example", {})
-        if ba and (ba.get("before") or ba.get("after")):
-            col_b, col_a = st.columns(2)
-            with col_b:
-                st.markdown("**Before:**")
-                st.code(ba.get("before", "N/A"), language="plaintext")
-            with col_a:
-                st.markdown("**After:**")
-                st.code(ba.get("after", "N/A"), language="plaintext")
-                
-        if advice.get("validation_steps"):
-            st.markdown("**Validation Steps:**")
-            for step in advice["validation_steps"]:
-                st.markdown(f"1. {step}")
-                
-        if advice.get("uncertainty"):
-            st.caption(f"ℹ️ Uncertainty / Diagnostic Note: {advice['uncertainty']}")
+        st.markdown("### 🛠️ Senior Engineer Diagnostic & Remediation Plan")
+
+        render_remediation(primary_res.get("remediation", {}))
+
