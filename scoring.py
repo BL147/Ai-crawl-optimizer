@@ -20,14 +20,14 @@ class ScoringEngine:
     # Base score
     BASE_SCORE = 100
 
-    # Weight definitions
-    PENALTY_HTTP_403 = 25
-    PENALTY_HTTP_429 = 15
-    PENALTY_HTTP_5XX = 20
-    PENALTY_WAF_CHALLENGE = 25
-    PENALTY_CAPTCHA = 20
+    # Weight definitions (exact spec from prompt)
+    PENALTY_HTTP_403 = 20
+    PENALTY_HTTP_429 = 10
+    PENALTY_HTTP_5XX = 15
+    PENALTY_WAF_CHALLENGE = 20
+    PENALTY_CAPTCHA = 25
     PENALTY_AI_DISCREPANCY = 20
-    PENALTY_ROBOTS_AI_BLOCKED = 15
+    PENALTY_ROBOTS_AI_BLOCKED = 10
     PENALTY_HIGH_LATENCY = 10
 
     @classmethod

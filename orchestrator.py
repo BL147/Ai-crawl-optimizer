@@ -186,14 +186,16 @@ def _generate_ai_recommendations(scoring_result: Dict[str, Any], audit_context: 
     Generates intelligent root cause and ready-to-use WAF / robots.txt rules.
     If S has created an AI analysis module, can delegate to it.
     """
-    # Attempt to import S's module if available
+    # Dynamic integration with S's AI module (if present in repo)
     try:
-        from ai_advisor import generate_recommendations as s_ai_advisor
-        rec = s_ai_advisor(scoring_result, audit_context)
-        if rec and isinstance(rec, dict) and "root_cause" in rec:
-            return rec
+        import importlib.util
+        if importlib.util.find_spec("ai_advisor"):
+            ai_mod = importlib.import_module("ai_advisor")
+            if hasattr(ai_mod, "generate_recommendations"):
+                rec = ai_mod.generate_recommendations(scoring_result, audit_context)
+                if rec and isinstance(rec, dict) and "root_cause" in rec:
+                    return rec
     except Exception:
-        # Fall back gracefully to built-in generator if S's module is absent or raises an error
         pass
 
     # Built-in intelligent rule-based generator
@@ -273,11 +275,14 @@ def run_audit(url: str, **kwargs) -> Dict[str, Any]:
     external_crawler_used = False
 
     try:
-        from crawler import crawl_target as a_crawl_target
-        raw_crawl = a_crawl_target(clean_url)
-        if raw_crawl and "bots" in raw_crawl and raw_crawl["bots"]:
-            bot_results = raw_crawl.get("bots", {})
-            external_crawler_used = True
+        import importlib.util
+        if importlib.util.find_spec("crawler"):
+            crawler_mod = importlib.import_module("crawler")
+            if hasattr(crawler_mod, "crawl_target"):
+                raw_crawl = crawler_mod.crawl_target(clean_url)
+                if raw_crawl and "bots" in raw_crawl and raw_crawl["bots"]:
+                    bot_results = raw_crawl.get("bots", {})
+                    external_crawler_used = True
     except Exception:
         pass
 
