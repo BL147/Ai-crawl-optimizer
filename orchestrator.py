@@ -189,8 +189,11 @@ def _generate_ai_recommendations(scoring_result: Dict[str, Any], audit_context: 
     # Attempt to import S's module if available
     try:
         from ai_advisor import generate_recommendations as s_ai_advisor
-        return s_ai_advisor(scoring_result, audit_context)
-    except ImportError:
+        rec = s_ai_advisor(scoring_result, audit_context)
+        if rec and isinstance(rec, dict) and "root_cause" in rec:
+            return rec
+    except Exception:
+        # Fall back gracefully to built-in generator if S's module is absent or raises an error
         pass
 
     # Built-in intelligent rule-based generator
@@ -272,9 +275,13 @@ def run_audit(url: str, **kwargs) -> Dict[str, Any]:
     try:
         from crawler import crawl_target as a_crawl_target
         raw_crawl = a_crawl_target(clean_url)
-        bot_results = raw_crawl.get("bots", {})
-        external_crawler_used = True
-    except ImportError:
+        if raw_crawl and "bots" in raw_crawl and raw_crawl["bots"]:
+            bot_results = raw_crawl.get("bots", {})
+            external_crawler_used = True
+    except Exception:
+        pass
+
+    if not bot_results:
         # Resilient Built-in Multi-Agent Emulation
         for bot_id, bot_meta in EMULATED_AGENTS.items():
             bot_results[bot_id] = _fetch_with_agent(clean_url, bot_meta["ua"])
