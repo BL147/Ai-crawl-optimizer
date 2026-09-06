@@ -72,7 +72,8 @@ class ScoringEngine:
         server_error_bots = []
 
         for bot_name, bot_info in bots_data.items():
-            status = bot_info.get("status", 200)
+            raw_status = bot_info.get("status")
+            status = raw_status if isinstance(raw_status, int) else 200
             verdict = bot_info.get("verdict", "")
             is_blocked = bot_info.get("blocked", False) or (status in [401, 403] and verdict != "INCONCLUSIVE")
 
@@ -209,19 +210,56 @@ class ScoringEngine:
         # Clamp score between 0 and 100
         final_score = max(0, min(100, score))
 
-        # Determine grade and visual badge status
+        # Determine grade, risk level, and visual badge status
         grade, status, color = cls._get_grade(final_score)
+        risk_level = cls._get_risk_level(final_score)
+
+        # Build human-readable explainable reasons list
+        reasons = [
+            f"[{p['severity']}] {p['factor']}: {p['detail']} ({p['penalty']} pts)"
+            for p in penalties
+        ]
+        if not reasons:
+            reasons = ["No critical access barriers detected. Website is accessible to AI search crawlers."]
+
+        # Aggregate metrics from crawl findings
+        primary_bot = next(iter(bots_data.values()), {})
+        metrics = {
+            "http_status": primary_bot.get("status", browser_data.get("status", 200)),
+            "response_time_ms": primary_bot.get("latency_ms", browser_data.get("latency_ms", 0)),
+            "verdict": primary_bot.get("verdict", "ACCESSIBLE"),
+            "mechanism": primary_bot.get("mechanism", "NONE"),
+            "confidence": primary_bot.get("confidence", 0.0),
+            "robots_allowed": robots_data.get("is_allowed", not robots_ai_disallowed),
+            "selective_block_detected": selective_ai_block,
+            "page_text_length": primary_bot.get("text_length", 0),
+        }
 
         return {
             "score": final_score,
             "grade": grade,
+            "risk_level": risk_level,
             "status": status,
             "color": color,
+            "reasons": reasons,
+            "metrics": metrics,
             "base_score": cls.BASE_SCORE,
             "total_deductions": cls.BASE_SCORE - final_score,
             "penalties": penalties,
             "summary": cls._build_summary(final_score, penalties)
         }
+
+    @staticmethod
+    def _get_risk_level(score: int) -> str:
+        """Determines risk level from final score."""
+        if score >= 90:
+            return "LOW"
+        elif score >= 75:
+            return "MEDIUM"
+        elif score >= 50:
+            return "HIGH"
+        else:
+            return "CRITICAL"
 
     @classmethod
     def _normalize_input(cls, audit_data: Any) -> Dict[str, Any]:
@@ -345,6 +383,8 @@ class ScoringEngine:
         elif mechanism != "NONE" and "HTTP" not in mechanism:
             waf_name = mechanism
 
+        text_length = res.get("page", {}).get("text_length", 0) if isinstance(res.get("page"), dict) else 0
+
         return {
             "status": status,
             "latency_ms": int(latency),
@@ -355,6 +395,7 @@ class ScoringEngine:
             "waf": waf_name,
             "captcha": has_captcha,
             "signals": dom_signals + matched_headers + matched_keywords,
+            "text_length": text_length,
             "raw": res,
         }
 

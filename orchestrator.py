@@ -2,408 +2,192 @@
 orchestrator.py - Master Backend Orchestrator
 Author: Shlok (System Integrator)
 
-Provides a unified interface for the entire backend pipeline:
-URL -> Crawler -> Detection -> Scoring -> AI Recommendations -> Validated Result
+Architecture:
+URL + persona
+      ↓
+Anshul's actual crawler (from crawler import crawl_sync, crawl_with_baseline_sync)
+      ↓
+Shlok's scoring engine (from scoring import calculate_score)
+      ↓
+Kavish's remediation engine (from remediation import generate_remediation)
+      ↓
+Combined integration result
 
-Designed for K (Frontend):
-    from orchestrator import run_audit
-    result = run_audit("https://example.com")
+Single orchestration interface:
+    run_audit(url, persona)
 """
 
-import time
-import re
+import os
 from datetime import datetime, timezone
 from typing import Dict, Any, Optional
-from urllib.parse import urlparse, urljoin
 
-import requests
-
+from crawler import crawl_sync, crawl_with_baseline_sync
 from scoring import calculate_score
-
-# User agent signatures for emulation
-EMULATED_AGENTS = {
-    "browser_chrome": {
-        "name": "Standard Chrome Browser",
-        "ua": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-        "is_ai": False
-    },
-    "gpt_bot": {
-        "name": "OpenAI GPTBot",
-        "ua": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; GPTBot/1.2; +https://openai.com/gptbot)",
-        "is_ai": True
-    },
-    "claude_bot": {
-        "name": "Anthropic ClaudeBot",
-        "ua": "Mozilla/5.0 AppleWebKit/537.36 (KHTML, like Gecko; compatible; ClaudeBot/1.0; +claudebot@anthropic.com)",
-        "is_ai": True
-    },
-    "perplexity_bot": {
-        "name": "Perplexity AI Crawler",
-        "ua": "PerplexityBot/1.0 (+https://perplexity.ai/perplexitybot)",
-        "is_ai": True
-    },
-    "google_bot": {
-        "name": "Googlebot (Standard SEO)",
-        "ua": "Mozilla/5.0 (compatible; Googlebot/2.1; +http://www.google.com/bot.html)",
-        "is_ai": False
-    }
-}
+from remediation import generate_remediation
 
 
-def _detect_waf_and_captcha(headers: Dict[str, str], text: str) -> Dict[str, Any]:
-    """Detects security shields and CAPTCHAs from HTTP response."""
-    h_lower = {k.lower(): v.lower() for k, v in headers.items()}
-    t_lower = text.lower() if text else ""
-
-    waf_name = None
-    captcha_detected = False
-
-    # 1. Cloudflare Detection
-    if "cf-ray" in h_lower or "server" in h_lower and "cloudflare" in h_lower["server"]:
-        waf_name = "Cloudflare"
-        if "cf-mitigated" in h_lower and h_lower["cf-mitigated"] == "challenge":
-            captcha_detected = True
-
-    # 2. Akamai
-    elif "x-akamai-transformed" in h_lower or "akamai" in h_lower.get("server", ""):
-        waf_name = "Akamai WAF"
-
-    # 3. DataDome
-    elif "x-datadome" in h_lower or "datadome" in t_lower:
-        waf_name = "DataDome Anti-Bot"
-        captcha_detected = True
-
-    # 4. AWS CloudFront
-    elif "x-amz-cf-id" in h_lower:
-        waf_name = "AWS CloudFront WAF"
-
-    # Content-based CAPTCHA / Challenge signals
-    captcha_signatures = [
-        "turnstile", "cf-turnstile", "recaptcha", "hcaptcha",
-        "checking your browser", "just a moment...", "ray id:"
-    ]
-    if any(sig in t_lower for sig in captcha_signatures):
-        captcha_detected = True
-        if not waf_name:
-            waf_name = "Cloudflare"
-
-    return {
-        "waf_name": waf_name,
-        "captcha_detected": captcha_detected
-    }
-
-
-def _fetch_with_agent(url: str, ua_string: str, timeout: float = 6.0) -> Dict[str, Any]:
-    """Lightweight resilient fallback fetcher."""
-    headers = {
-        "User-Agent": ua_string,
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.5"
-    }
-    start = time.time()
-    try:
-        resp = requests.get(url, headers=headers, timeout=timeout, allow_redirects=True)
-        latency_ms = int((time.time() - start) * 1000)
-        detection = _detect_waf_and_captcha(dict(resp.headers), resp.text[:4000])
-
-        blocked = (resp.status_code in [401, 403, 429]) or detection["captcha_detected"]
-
-        return {
-            "status": resp.status_code,
-            "latency_ms": latency_ms,
-            "blocked": blocked,
-            "waf": detection["waf_name"],
-            "captcha": detection["captcha_detected"],
-            "headers": dict(resp.headers),
-            "body_snippet": resp.text[:500]
-        }
-    except requests.exceptions.Timeout:
-        return {
-            "status": 504,
-            "latency_ms": int(timeout * 1000),
-            "blocked": True,
-            "waf": None,
-            "captcha": False,
-            "error": "Connection timed out"
-        }
-    except Exception as exc:
-        return {
-            "status": 500,
-            "latency_ms": int((time.time() - start) * 1000),
-            "blocked": True,
-            "waf": None,
-            "captcha": False,
-            "error": str(exc)
-        }
-
-
-def _check_robots_txt(base_url: str) -> Dict[str, Any]:
-    """Fetches and parses robots.txt for AI crawler disallow rules."""
-    parsed = urlparse(base_url)
-    robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-    try:
-        resp = requests.get(robots_url, headers={"User-Agent": "AI-Audit-Engine/1.0"}, timeout=4.0)
-        if resp.status_code == 200:
-            lines = resp.text.splitlines()
-            current_ua = ""
-            ai_disallowed = False
-            disallowed_bots = []
-
-            for raw_line in lines:
-                line = raw_line.strip()
-                if line.lower().startswith("user-agent:"):
-                    current_ua = line.split(":", 1)[1].strip().lower()
-                elif line.lower().startswith("disallow:") and "/" in line:
-                    if any(bot in current_ua for bot in ["gptbot", "claudebot", "perplexitybot", "ccbot"]):
-                        ai_disallowed = True
-                        if current_ua not in disallowed_bots:
-                            disallowed_bots.append(current_ua)
-
-            return {
-                "status": 200,
-                "ai_disallowed": ai_disallowed,
-                "disallowed_bots": disallowed_bots,
-                "content_snippet": resp.text[:600]
-            }
-        else:
-            return {
-                "status": resp.status_code,
-                "ai_disallowed": False,
-                "disallowed_bots": [],
-                "content_snippet": f"Returned HTTP {resp.status_code}"
-            }
-    except Exception as exc:
-        return {
-            "status": 500,
-            "ai_disallowed": False,
-            "disallowed_bots": [],
-            "content_snippet": f"Failed to fetch robots.txt: {exc}"
-        }
-
-
-def _generate_ai_recommendations(scoring_result: Dict[str, Any], audit_context: Dict[str, Any]) -> Dict[str, Any]:
+def run_audit(url: str, persona: str = "gptbot", **kwargs) -> Dict[str, Any]:
     """
-    Generates intelligent root cause and ready-to-use WAF / robots.txt rules.
-    If S has created an AI analysis module, can delegate to it.
-    """
-    # Dynamic integration with S's AI module (if present in repo)
-    try:
-        import importlib.util
-        if importlib.util.find_spec("ai_advisor"):
-            ai_mod = importlib.import_module("ai_advisor")
-            if hasattr(ai_mod, "generate_recommendations"):
-                rec = ai_mod.generate_recommendations(scoring_result, audit_context)
-                if rec and isinstance(rec, dict) and "root_cause" in rec:
-                    return rec
-    except Exception:
-        pass
-
-    # Built-in intelligent rule-based generator
-    score = scoring_result["score"]
-    penalties = scoring_result.get("penalties", [])
-
-    is_blocked_by_waf = any("Anti-Bot" in p["factor"] or "403" in p["factor"] for p in penalties)
-    is_blocked_by_robots = any("Robots.txt" in p["factor"] for p in penalties)
-    has_discrepancy = any("Discrepancy" in p["factor"] for p in penalties)
-
-    root_causes = []
-    action_items = []
-
-    if is_blocked_by_waf:
-        root_causes.append("Cloudflare WAF / Anti-bot rules classify generative AI search agents as untrusted scrapers and return 403 challenges.")
-        action_items.append("Create a Cloudflare WAF Custom Rule with action 'Skip' or 'Allow' for verified AI search user agents.")
-
-    if is_blocked_by_robots:
-        root_causes.append("Your robots.txt disallows GPTBot, ClaudeBot, or PerplexityBot, preventing indexing in generative search.")
-        action_items.append("Update robots.txt to explicitly allow AI agents on public marketing and documentation paths.")
-
-    if not root_causes:
-        root_causes.append("No critical blocking barriers detected. Site is accessible to AI search engines.")
-        action_items.append("Maintain low TTFB (Time to First Byte) to preserve crawl budget.")
-
-    # Generate Cloudflare WAF Expression Snippet
-    cloudflare_waf_rule = (
-        '(http.user_agent contains "GPTBot" or '
-        'http.user_agent contains "ClaudeBot" or '
-        'http.user_agent contains "PerplexityBot") and '
-        'not cf.client.bot'
-    )
-
-    # Generate optimized robots.txt snippet
-    robots_txt_fix = """# AI Search Crawler Directives (Optimized)
-User-agent: GPTBot
-Allow: /
-
-User-agent: ClaudeBot
-Allow: /
-
-User-agent: PerplexityBot
-Allow: /
-
-# Standard crawlers
-User-agent: *
-Allow: /
-"""
-
-    return {
-        "root_cause": " ".join(root_causes),
-        "cloudflare_waf_rule": cloudflare_waf_rule,
-        "robots_txt_fix": robots_txt_fix,
-        "action_items": action_items
-    }
-
-
-def run_audit(url: str, **kwargs) -> Dict[str, Any]:
-    """
-    Main Orchestrator Entrypoint for K (Frontend).
+    Single orchestration interface:
+    URL + persona -> Anshul Crawler -> Shlok Scoring -> Kavish Remediation -> Combined Result.
 
     Parameters:
-        url (str): Target URL to inspect (e.g. "https://example.com" or "http://127.0.0.1:5050")
+        url (str): Target URL to audit (e.g. "https://example.com" or "http://127.0.0.1:5050").
+        persona (str): Bot persona to emulate ("gptbot", "claudebot", "perplexitybot", etc.). Defaults to "gptbot".
+        **kwargs: Optional parameters (include_baseline=True, timeout_seconds=12.0, api_key=None, model="gemini-1.5-flash").
 
     Returns:
-        Dict[str, Any]: Standardized AuditResult contract with scoring, bot matrix, and fixes.
+        Dict[str, Any]: Combined integration result conforming to:
+        {
+            "crawl": ...,
+            "score": ...,
+            "risk_level": ...,
+            "reasons": ...,
+            "metrics": ...,
+            "remediation": ...
+        }
     """
     # 1. URL Normalization
     clean_url = url.strip()
     if not clean_url.startswith("http://") and not clean_url.startswith("https://"):
         clean_url = f"https://{clean_url}"
 
+    clean_persona = (persona or "gptbot").strip().lower()
     timestamp = datetime.now(timezone.utc).isoformat()
+    include_baseline = kwargs.get("include_baseline", True)
+    timeout_seconds = kwargs.get("timeout_seconds", 12.0)
+    api_key = kwargs.get("api_key") or os.getenv("GEMINI_API_KEY")
 
-    # 2. Check if A (Crawler - Anshul) has the engine ready
-    bot_results = {}
-    external_crawler_used = False
-    raw_crawler_result = None
-    baseline_result = None
+    # 2. Stage 1: Anshul's Actual Crawler
+    crawl_result: Dict[str, Any]
+    primary_crawl: Dict[str, Any]
 
-    try:
-        import importlib.util
-        if importlib.util.find_spec("crawler"):
-            crawler_mod = importlib.import_module("crawler")
-            
-            # Use Anshul's baseline audit or crawl_sync
-            if hasattr(crawler_mod, "crawl_with_baseline_sync"):
-                baseline_result = crawler_mod.crawl_with_baseline_sync(clean_url, persona="gptbot", timeout_seconds=8.0)
-            elif hasattr(crawler_mod, "crawl_sync"):
-                gpt_res = crawler_mod.crawl_sync(clean_url, persona="gptbot", timeout_seconds=8.0)
-                chrome_res = crawler_mod.crawl_sync(clean_url, persona="standard_browser", timeout_seconds=8.0)
-                baseline_result = {
-                    "url": clean_url,
-                    "target_persona": gpt_res,
-                    "baseline_browser": chrome_res,
-                    "selective_ai_block_detected": (
-                        gpt_res.get("detection", {}).get("is_blocked", False) and
-                        not chrome_res.get("detection", {}).get("is_blocked", False)
-                    ),
-                }
-
-            if baseline_result and "target_persona" in baseline_result:
-                tp = baseline_result["target_persona"]
-                bb = baseline_result.get("baseline_browser", {})
-                raw_crawler_result = tp
-                external_crawler_used = True
-
-                def _to_bot_entry(res):
-                    http = res.get("http", {})
-                    det = res.get("detection", {})
-                    inf = det.get("inference", {})
-                    ev = det.get("evidence", {})
-                    mech = inf.get("mechanism")
-                    mech_str = str(mech) if mech and str(mech).upper() not in ["NONE", ""] else None
-                    has_captcha = any(
-                        "turnstile" in s.lower() or "captcha" in s.lower() or "challenge" in s.lower()
-                        for s in (ev.get("dom_signals", []) + ev.get("matched_keywords", []) + [str(mech)])
-                    )
-                    return {
-                        "status": http.get("status_code", 200),
-                        "latency_ms": int(http.get("response_time_ms", 0) or 0),
-                        "blocked": det.get("is_blocked", False) or inf.get("verdict") in ["BLOCKED", "CHALLENGED"],
-                        "waf": mech_str,
-                        "captcha": has_captcha,
-                        "headers": http.get("headers", {}),
-                        "verdict": inf.get("verdict", "ACCESSIBLE"),
-                        "mechanism": str(mech),
-                        "raw": res,
-                    }
-
-                bot_results["gpt_bot"] = _to_bot_entry(tp)
-                bot_results["browser_chrome"] = _to_bot_entry(bb)
-                bot_results["claude_bot"] = dict(bot_results["gpt_bot"])
-                bot_results["claude_bot"]["raw"] = tp
-                bot_results["perplexity_bot"] = dict(bot_results["gpt_bot"])
-                bot_results["perplexity_bot"]["raw"] = tp
-    except Exception:
-        pass
-
-    if not bot_results:
-        # Resilient Built-in Fallback Multi-Agent Emulation
-        for bot_id, bot_meta in EMULATED_AGENTS.items():
-            bot_results[bot_id] = _fetch_with_agent(clean_url, bot_meta["ua"])
-
-    # Extract browser baseline
-    browser_data = bot_results.get("browser_chrome", {"status": 200, "latency_ms": 150})
-
-    # 3. Check Robots.txt (prefer crawler robots evaluation if available)
-    if raw_crawler_result and raw_crawler_result.get("robots_txt"):
-        c_rob = raw_crawler_result["robots_txt"]
-        robots_data = {
-            "status": c_rob.get("status_code", 200),
-            "ai_disallowed": not c_rob.get("is_allowed", True),
-            "is_allowed": c_rob.get("is_allowed", True),
-            "matching_rule": c_rob.get("matching_rule"),
-            "disallowed_bots": ["gptbot"] if not c_rob.get("is_allowed") else [],
-            "content_snippet": c_rob.get("raw_content") or str(c_rob.get("matching_rule")),
-        }
+    if include_baseline:
+        try:
+            crawl_result = crawl_with_baseline_sync(
+                clean_url,
+                persona=clean_persona,
+                timeout_seconds=timeout_seconds,
+            )
+            primary_crawl = crawl_result.get("target_persona", crawl_result)
+        except Exception as exc:
+            # Fallback to single persona crawl if baseline encounter an issue
+            primary_crawl = crawl_sync(
+                clean_url,
+                persona=clean_persona,
+                timeout_seconds=timeout_seconds,
+            )
+            crawl_result = primary_crawl
     else:
-        robots_data = _check_robots_txt(clean_url)
+        primary_crawl = crawl_sync(
+            clean_url,
+            persona=clean_persona,
+            timeout_seconds=timeout_seconds,
+        )
+        crawl_result = primary_crawl
 
-    # 4. Aggregate Global Detection
-    global_waf = next((b.get("waf") for b in bot_results.values() if b.get("waf")), None)
-    global_captcha = any(b.get("captcha") for b in bot_results.values())
-    selective_block = baseline_result.get("selective_ai_block_detected", False) if baseline_result else False
+    # 3. Stage 2: Shlok's Scoring Engine
+    score_result = calculate_score(crawl_result)
 
-    audit_payload = {
-        "url": clean_url,
-        "browser": browser_data,
-        "bots": bot_results,
-        "robots_txt": robots_data,
-        "waf_detected": global_waf,
-        "captcha_detected": global_captcha,
-        "raw_crawler_result": raw_crawler_result,
-        "selective_ai_block_detected": selective_block,
+    # 4. Stage 3: Kavish's Remediation Engine
+    # Directly invokes Kavish's generate_remediation with authentic crawler output
+    remediation_result = generate_remediation(primary_crawl, api_key=api_key)
+
+    # 5. Build bot_matrix mapping for contract & UI compatibility
+    baseline_browser = crawl_result.get("baseline_browser", {}) if isinstance(crawl_result, dict) else {}
+    browser_status = baseline_browser.get("http", {}).get("status_code", 200)
+    browser_latency = int(baseline_browser.get("http", {}).get("response_time_ms", 150) or 150)
+    browser_blocked = baseline_browser.get("detection", {}).get("is_blocked", False)
+
+    http_info = primary_crawl.get("http", {})
+    det_info = primary_crawl.get("detection", {})
+    inf_info = det_info.get("inference", {})
+    mech_str = str(inf_info.get("mechanism", "NONE"))
+    waf_val = mech_str if mech_str not in ["NONE", ""] else None
+
+    primary_bot_entry = {
+        "status": http_info.get("status_code", 200),
+        "latency_ms": int(http_info.get("response_time_ms", 0) or 0),
+        "blocked": det_info.get("is_blocked", False) or inf_info.get("verdict") in ["BLOCKED", "CHALLENGED"],
+        "verdict": inf_info.get("verdict", "ACCESSIBLE"),
+        "mechanism": mech_str,
+        "waf": waf_val,
+        "captcha": any("turnstile" in s.lower() or "captcha" in s.lower() for s in det_info.get("signals", [])),
+        "headers": http_info.get("headers", {}),
+        "raw": primary_crawl,
     }
 
-    # 5. Execute Scoring Engine
-    scoring_result = calculate_score(audit_payload)
-
-    # 6. Execute AI Diagnosis
-    ai_recommendations = _generate_ai_recommendations(scoring_result, audit_payload)
-
-    # 7. Package and return the final unified result for K
-    return {
-        "url": clean_url,
-        "timestamp": timestamp,
-        "engine_version": "2.0.0-integrator",
-        "external_crawler_active": external_crawler_used,
-        "summary": {
-            "score": scoring_result["score"],
-            "grade": scoring_result["grade"],
-            "status": scoring_result["status"],
-            "color": scoring_result["color"],
-            "text": scoring_result["summary"]
+    bot_matrix = {
+        clean_persona: primary_bot_entry,
+        "browser_chrome": {
+            "status": browser_status,
+            "latency_ms": browser_latency,
+            "blocked": browser_blocked,
+            "waf": None,
+            "captcha": False,
         },
-        "scoring": scoring_result,
-        "bot_matrix": bot_results,
-        "robots_txt": robots_data,
-        "ai_recommendations": ai_recommendations,
-        "status": "success"
     }
+
+    # Common aliases for UI dashboards expecting gpt_bot / claude_bot keys
+    if "gpt" in clean_persona:
+        bot_matrix["gpt_bot"] = primary_bot_entry
+    elif "claude" in clean_persona:
+        bot_matrix["claude_bot"] = primary_bot_entry
+    elif "perplexity" in clean_persona:
+        bot_matrix["perplexity_bot"] = primary_bot_entry
+
+    if "gpt_bot" not in bot_matrix:
+        bot_matrix["gpt_bot"] = dict(primary_bot_entry)
+    if "claude_bot" not in bot_matrix:
+        bot_matrix["claude_bot"] = dict(primary_bot_entry)
+
+    # 6. Combined Integration Result
+    combined_result = {
+        # Mandated Minimum Contract
+        "crawl": primary_crawl,
+        "score": score_result["score"],
+        "risk_level": score_result["risk_level"],
+        "reasons": score_result["reasons"],
+        "metrics": score_result["metrics"],
+        "remediation": remediation_result,
+
+        # Extended integration fields for full system compatibility
+        "url": clean_url,
+        "persona": clean_persona,
+        "timestamp": timestamp,
+        "grade": score_result["grade"],
+        "status": "success",
+        "summary": {
+            "score": score_result["score"],
+            "grade": score_result["grade"],
+            "status": score_result["status"],
+            "color": score_result["color"],
+            "text": score_result["summary"],
+        },
+        "scoring": score_result,
+        "bot_matrix": bot_matrix,
+        "robots_txt": primary_crawl.get("robots_txt", {}),
+        "ai_recommendations": {
+            "root_cause": remediation_result.get("problem_detected") or remediation_result.get("problem", ""),
+            "cloudflare_waf_rule": remediation_result.get("code_or_configuration_change") or remediation_result.get("code_or_config", ""),
+            "robots_txt_fix": remediation_result.get("before_after_example", {}).get("after", ""),
+            "action_items": remediation_result.get("validation_steps", []),
+        },
+        "full_baseline": crawl_result if include_baseline else None,
+    }
+
+    return combined_result
 
 
 if __name__ == "__main__":
     import json
-    print("Testing orchestrator against public URL...")
-    test_res = run_audit("https://example.com")
-    print(f"Target: {test_res['url']}")
-    print(f"Score: {test_res['summary']['score']}/100 ({test_res['summary']['grade']})")
-    print(f"Status: {test_res['summary']['status']}")
+    print("Testing single orchestration interface run_audit('https://example.com', 'gptbot')...")
+    res = run_audit("https://example.com", "gptbot")
+    print(f"Target:     {res['url']} (Persona: {res['persona']})")
+    print(f"Score:      {res['score']}/100 ({res['grade']})")
+    print(f"Risk Level: {res['risk_level']}")
+    print("Reasons:")
+    for r in res["reasons"]:
+        print(f"  - {r}")
+    print("Metrics:   ", res["metrics"])
+    print("Remediation problem: ", res["remediation"].get("problem_detected"))
