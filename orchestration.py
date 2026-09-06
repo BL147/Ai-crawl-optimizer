@@ -2,6 +2,7 @@
 
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
+from urllib.parse import urlparse
 
 from crawler import crawl_sync, crawl_with_baseline_sync
 from remediation import generate_remediation
@@ -27,7 +28,10 @@ def _scoring_payload(crawl_result: Dict[str, Any], baseline: Optional[Dict[str, 
     inference = detection.get("inference", {})
     mechanism = str(inference.get("mechanism", "NONE")).upper()
     status_code = http.get("status_code")
-    blocked = bool(detection.get("is_blocked")) or status_code in {401, 403, 429}
+    verdict = str(inference.get("verdict", "")).upper()
+    blocked = bool(detection.get("is_blocked")) or (
+        status_code in {401, 429} and verdict != "INCONCLUSIVE"
+    )
     latency = http.get("response_time_ms") or 0
 
     baseline_http = (baseline or {}).get("http", {})
@@ -63,7 +67,7 @@ def run_audit(
 ) -> Dict[str, Any]:
     """Run the real crawler, scorer, and remediation engine as one audit."""
     clean_url = url.strip()
-    if not clean_url.startswith(("http://", "https://")):
+    if not urlparse(clean_url).scheme:
         clean_url = f"https://{clean_url}"
 
     baseline = None

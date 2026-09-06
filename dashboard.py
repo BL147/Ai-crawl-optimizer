@@ -398,7 +398,9 @@ if submit_button:
             mechanism = str(inference.get("mechanism", "NONE")).upper()
             robots_exists = robots_data.get("exists", False)
             robots_allowed = robots_data.get("is_allowed", True)
+            verdict = str(inference.get("verdict", "ACCESSIBLE")).upper()
             is_challenge = mechanism not in ["NONE", "HTTP_FORBIDDEN", "INCONCLUSIVE", ""]
+            confirmed_block = is_blocked or verdict == "BLOCKED"
 
             reachable = primary_res.get("success") or (status_code is not None)
             reachable_icon = "✓" if reachable else "✗"
@@ -409,9 +411,9 @@ if submit_button:
             robots_class = "status-pass" if robots_exists else "status-fail"
             robots_text = "robots.txt found" if robots_exists else "robots.txt not found"
 
-            ai_icon = "✗" if (is_blocked or not robots_allowed or status_code in [403, 401]) else "✓"
-            ai_class = "status-fail" if (is_blocked or not robots_allowed or status_code in [403, 401]) else "status-pass"
-            ai_text = "AI crawler blocked" if (is_blocked or not robots_allowed or status_code in [403, 401]) else "AI crawler allowed"
+            ai_icon = "✗" if (confirmed_block or not robots_allowed) else "✓"
+            ai_class = "status-fail" if (confirmed_block or not robots_allowed) else "status-pass"
+            ai_text = "AI crawler blocked" if (confirmed_block or not robots_allowed) else "AI crawler allowed"
 
             if status_code == 200:
                 http_icon = "✓"
@@ -468,7 +470,8 @@ if submit_button:
             allowed_txt = "✅ Allowed" if r_robots.get("is_allowed", True) else "❌ Disallowed"
             
             # Status icon
-            if is_b or st_code in [403, 401]:
+            row_verdict = str(r_inf.get("verdict", "ACCESSIBLE")).upper()
+            if is_b or row_verdict == "BLOCKED":
                 access_status = f"❌ Blocked ({st_code or 'Denied'})"
             elif st_code == 200:
                 access_status = "✅ Accessible (200 OK)"
@@ -491,7 +494,7 @@ if submit_button:
         if baseline_result and ai_results:
             base_status = baseline_result.get("http", {}).get("status_code")
             ai_blocked_any = any(
-                r.get("detection", {}).get("is_blocked") or r.get("http", {}).get("status_code") in [403, 401]
+                r.get("detection", {}).get("is_blocked") or r.get("detection", {}).get("inference", {}).get("verdict") == "BLOCKED"
                 for r in ai_results
             )
             if base_status == 200 and ai_blocked_any:
