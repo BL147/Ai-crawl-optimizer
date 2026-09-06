@@ -83,3 +83,36 @@ Allow: /
         "robots_txt_fix": robots_txt_fix,
         "action_items": action_items
     }
+
+
+if __name__ == "__main__":
+    import json
+    # Sample mock scoring input
+    sample_scoring = {
+        "score": 25,
+        "grade": "F",
+        "status": "AI CRAWL BLOCKED",
+        "penalties": [
+            {"factor": "HTTP 403 Forbidden", "category": "HTTP Status", "penalty": -25},
+            {"factor": "Anti-Bot Shield Challenge (Cloudflare)", "category": "Anti-Bot & WAF", "penalty": -25},
+            {"factor": "Robots.txt AI Crawl Disallow", "category": "Robots.txt Policy", "penalty": -15}
+        ]
+    }
+    sample_context = {
+        "browser": {"status": 200},
+        "bots": {"gpt_bot": {"status": 403, "blocked": True}},
+        "robots_txt": {"ai_disallowed": True}
+    }
+
+    print("=== RUNNING AI ADVISOR TEST ===")
+    rec = generate_recommendations(sample_scoring, sample_context)
+    print("\n[ROOT CAUSE]:")
+    print(rec["root_cause"])
+    print("\n[CLOUDFLARE WAF RULE]:")
+    print(rec["cloudflare_waf_rule"])
+    print("\n[ROBOTS.TXT FIX]:")
+    print(rec["robots_txt_fix"])
+    print("[ACTION ITEMS]:")
+    for item in rec["action_items"]:
+        print(f" - {item}")
+
