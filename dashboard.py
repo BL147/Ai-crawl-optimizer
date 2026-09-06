@@ -14,50 +14,118 @@ st.set_page_config(
 )
 
 # Custom Styling
+import os
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
+# Custom Styling - Modern Glassmorphism & High Contrast Dark Theme
 st.markdown("""
 <style>
+    @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+    
+    html, body, [class*="css"] {
+        font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, sans-serif;
+    }
+
+    /* Gradient Header */
+    .hero-container {
+        background: radial-gradient(circle at 15% 20%, rgba(59, 130, 246, 0.15) 0%, transparent 40%),
+                    radial-gradient(circle at 85% 30%, rgba(139, 92, 246, 0.12) 0%, transparent 40%),
+                    linear-gradient(180deg, rgba(15, 23, 42, 0.7) 0%, rgba(15, 23, 42, 0.2) 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 20px;
+        padding: 2.2rem 2.5rem;
+        margin-bottom: 2rem;
+        backdrop-filter: blur(12px);
+    }
     .main-title {
-        font-size: 2.3rem;
+        font-size: 2.4rem;
         font-weight: 800;
-        margin-bottom: 0.2rem;
+        background: linear-gradient(135deg, #FFFFFF 20%, #94A3B8 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
+        margin-bottom: 0.4rem;
+        letter-spacing: -0.03em;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
     }
     .sub-title {
-        font-size: 1rem;
-        opacity: 0.75;
-        margin-bottom: 1.5rem;
+        font-size: 1.05rem;
+        color: #94A3B8;
+        margin-bottom: 1.2rem;
+        line-height: 1.5;
     }
+    
+    .status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.35rem 0.9rem;
+        border-radius: 9999px;
+        font-size: 0.82rem;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+    }
+    .status-pill-active {
+        background: rgba(16, 185, 129, 0.12);
+        color: #34D399;
+        border: 1px solid rgba(16, 185, 129, 0.35);
+    }
+    .status-pill-fallback {
+        background: rgba(245, 158, 11, 0.12);
+        color: #FBBF24;
+        border: 1px solid rgba(245, 158, 11, 0.35);
+    }
+
+    /* Cards */
     .score-card {
-        background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-        border-radius: 16px;
-        padding: 2rem;
+        background: linear-gradient(145deg, #131E33 0%, #0B132B 100%);
+        border: 1px solid rgba(59, 130, 246, 0.25);
+        border-radius: 20px;
+        padding: 2.2rem 1.8rem;
         text-align: center;
         color: white;
-        margin: 1.2rem 0;
-        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.15);
+        margin: 0.5rem 0;
+        box-shadow: 0 20px 35px -10px rgba(0, 0, 0, 0.45);
+        position: relative;
+        overflow: hidden;
+    }
+    .score-card::before {
+        content: "";
+        position: absolute;
+        top: 0; left: 0; right: 0; height: 3px;
+        background: linear-gradient(90deg, #3B82F6, #8B5CF6, #EC4899);
     }
     .score-label {
-        font-size: 0.95rem;
-        letter-spacing: 0.12em;
-        font-weight: 600;
+        font-size: 0.85rem;
+        letter-spacing: 0.14em;
+        font-weight: 700;
         text-transform: uppercase;
         color: #94A3B8;
         margin-bottom: 0.5rem;
     }
     .score-num {
-        font-size: 4.5rem;
+        font-size: 4.6rem;
         font-weight: 900;
         line-height: 1;
-        letter-spacing: -0.04em;
+        letter-spacing: -0.05em;
+        background: linear-gradient(180deg, #FFFFFF 30%, #CBD5E1 100%);
+        -webkit-background-clip: text;
+        -webkit-text-fill-color: transparent;
     }
     .score-denom {
-        font-size: 1.4rem;
+        font-size: 1.25rem;
         color: #64748B;
         font-weight: 600;
-        margin-bottom: 0.8rem;
+        margin-bottom: 1rem;
     }
     .risk-badge {
         display: inline-block;
-        padding: 0.35rem 1.2rem;
+        padding: 0.4rem 1.4rem;
         border-radius: 9999px;
         font-size: 0.85rem;
         font-weight: 800;
@@ -65,45 +133,124 @@ st.markdown("""
         text-transform: uppercase;
     }
     .risk-high {
-        background-color: rgba(239, 68, 68, 0.2);
+        background-color: rgba(239, 68, 68, 0.18);
         color: #F87171;
         border: 1px solid #EF4444;
     }
     .risk-medium {
-        background-color: rgba(245, 158, 11, 0.2);
+        background-color: rgba(245, 158, 11, 0.18);
         color: #FBBF24;
         border: 1px solid #F59E0B;
     }
     .risk-low {
-        background-color: rgba(34, 197, 94, 0.2);
+        background-color: rgba(34, 197, 94, 0.18);
         color: #4ADE80;
         border: 1px solid #22C55E;
     }
+    
     .results-card {
-        background-color: #1E293B;
-        border: 1px solid #334155;
-        border-radius: 12px;
-        padding: 1.2rem 1.5rem;
+        background: linear-gradient(145deg, #131E33 0%, #0E172A 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px;
+        padding: 1.4rem 1.6rem;
         margin-top: 0.5rem;
-        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3);
     }
     .result-item {
-        font-size: 1.05rem;
-        color: #F1F5F9 !important;
-        padding: 0.35rem 0;
+        font-size: 1.02rem;
+        color: #E2E8F0 !important;
+        padding: 0.5rem 0;
         display: flex;
         align-items: center;
-        gap: 0.6rem;
+        gap: 0.85rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.04);
     }
-    .status-pass { color: #4ADE80 !important; font-weight: 800; font-size: 1.15rem; }
-    .status-fail { color: #F87171 !important; font-weight: 800; font-size: 1.15rem; }
-    .status-warn { color: #FBBF24 !important; font-weight: 800; font-size: 1.15rem; }
+    .result-item:last-child {
+        border-bottom: none;
+    }
+    .status-pass { color: #34D399 !important; font-weight: 800; font-size: 1.25rem; }
+    .status-fail { color: #F87171 !important; font-weight: 800; font-size: 1.25rem; }
+    .status-warn { color: #FBBF24 !important; font-weight: 800; font-size: 1.25rem; }
+    
+    /* Audit Form Styling */
+    div[data-testid="stForm"] {
+        background: rgba(19, 30, 51, 0.6);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 18px;
+        padding: 1.8rem;
+        backdrop-filter: blur(10px);
+        box-shadow: 0 15px 30px rgba(0, 0, 0, 0.25);
+    }
+
+    /* Remediation Callout Card */
+    .remediation-box {
+        background: linear-gradient(145deg, #101B2E 0%, #090F1E 100%);
+        border: 1px solid rgba(99, 102, 241, 0.3);
+        border-radius: 18px;
+        padding: 2rem 2.2rem;
+        margin-top: 1rem;
+        box-shadow: 0 15px 35px -5px rgba(0, 0, 0, 0.4);
+    }
+    .remediation-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.5rem;
+        background: rgba(99, 102, 241, 0.15);
+        border: 1px solid rgba(99, 102, 241, 0.4);
+        color: #A5B4FC;
+        border-radius: 9999px;
+        padding: 0.35rem 1rem;
+        font-size: 0.8rem;
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        margin-bottom: 1rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# App Header
-st.markdown('<div class="main-title">AI Accessibility Auditor</div>', unsafe_allow_html=True)
-st.markdown('<div class="sub-title">Multi-Persona AI Crawler Compatibility, WAF Challenge, & Bot Management Auditor</div>', unsafe_allow_html=True)
+# Environment API Key Detection Check (No sidebar key input)
+has_env_key = bool(os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY"))
+
+# Clean Sidebar: Information & Guidance Only (No API key bar)
+with st.sidebar:
+    st.markdown("### 🤖 System Configuration")
+    if has_env_key:
+        st.markdown("""
+        <div style="background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.35); border-radius: 12px; padding: 1rem; color: #34D399;">
+            <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 0.3rem;">✓ LLM Engine Configured</div>
+            <div style="font-size: 0.8rem; color: #A7F3D0; line-height: 1.4;">
+                API key detected from <code>.env</code> file. Generative remediation and AI synthesis are fully enabled.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div style="background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.35); border-radius: 12px; padding: 1rem; color: #FBBF24;">
+            <div style="font-weight: 700; font-size: 0.95rem; margin-bottom: 0.3rem;">ℹ️ Deterministic Grounded Engine</div>
+            <div style="font-size: 0.8rem; color: #FDE68A; line-height: 1.4;">
+                To enable Gemini AI reasoning, add your API key to <code>.env</code>:<br>
+                <code>GEMINI_API_KEY=your_key_here</code>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+    st.markdown("---")
+    st.markdown("#### 🎯 Supported AI Crawlers")
+    st.caption("• **OpenAI GPTBot** (ChatGPT Search & Retrieval)\n• **Anthropic ClaudeBot** (Claude Web Indexer)\n• **PerplexityBot** (Realtime AI Answer Engine)\n• **ByteSpider** (Douyin / TikTok AI Bot)\n• **Google-Extended** (Bard / Gemini Web Training)")
+    st.markdown("---")
+    st.caption("AI Crawl Optimizer v2.5 • Zero-Hallucination Grounded Remediation")
+
+# App Hero Banner
+engine_pill = '<span class="status-pill status-pill-active">⚡ Gemini 2.5 Generative Fix Active</span>' if has_env_key else '<span class="status-pill status-pill-fallback">🛡️ Grounded Remediation Active (.env key optional)</span>'
+
+st.markdown(f"""
+<div class="hero-container">
+    <div class="main-title">🌐 AI Accessibility & Bot Optimizer</div>
+    <div class="sub-title">Audit multi-persona AI crawler compatibility, detect edge WAF challenges, and generate instant, production-ready code fixes.</div>
+    {engine_pill}
+</div>
+""", unsafe_allow_html=True)
 
 # Controls & Form
 available_personas = list_personas()
@@ -113,9 +260,9 @@ with st.form("audit_form"):
     col1, col2 = st.columns([2.5, 1.5])
     with col1:
         url_input = st.text_input(
-            "Enter website:",
+            "Target Website URL:",
             placeholder="https://example.com",
-            help="Provide the target domain or URL"
+            help="Enter target website or domain to audit for AI crawler accessibility"
         )
     with col2:
         audit_mode = st.radio(
@@ -137,8 +284,8 @@ with st.form("audit_form"):
     else:
         selected_personas = ["gptbot", "claudebot", "perplexitybot", "bytespider", "google_extended"]
 
-    include_baseline = st.checkbox("Compare against standard Desktop Chrome baseline (to prove selective AI blocking)", value=True)
-    submit_button = st.form_submit_button("START AUDIT", type="primary", use_container_width=True)
+    include_baseline = st.checkbox("Compare against standard Desktop Chrome baseline (to verify selective AI blocking)", value=True)
+    submit_button = st.form_submit_button("🚀 START AUDIT", type="primary", use_container_width=True)
 
 def normalize_url(url: str) -> str:
     url = url.strip()
@@ -357,7 +504,23 @@ if submit_button:
         # Senior Remediation Engine
         st.write("---")
         st.markdown("### 🛠️ Senior Engineer Diagnostic & Remediation Plan")
-        
+
         engine = RemediationEngine()
         advice = engine.generate_remediation(primary_res)
-        st.markdown(advice.format_markdown())
+
+        if engine.used_ai:
+            st.markdown(
+                '<div class="remediation-badge">✨ Generated by Gemini AI Reasoning Engine</div>',
+                unsafe_allow_html=True
+            )
+        else:
+            st.markdown(
+                '<div class="remediation-badge" style="background: rgba(59,130,246,0.15); border-color: rgba(59,130,246,0.4); color: #93C5FD;">🛡️ Deterministic Grounded Engine (RFC 9309 & WAF Spec)</div>',
+                unsafe_allow_html=True
+            )
+            if engine.last_error:
+                st.info(f"ℹ️ Note on AI Generator: {engine.last_error} — Fell back gracefully to strict grounded remediation.")
+
+        # Beautifully render formatted remediation markdown
+        st.markdown(f'<div class="remediation-box">\n{advice.format_markdown()}\n</div>', unsafe_allow_html=True)
+
