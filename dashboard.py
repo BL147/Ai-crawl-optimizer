@@ -103,13 +103,34 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
 # Start Sandbox Server for live demo switching
 sandbox_url = start_sandbox(port=5050)
 
-# Sidebar: Demo Sandbox Switcher
+# Sidebar: Controls & API Key Configuration
 with st.sidebar:
-    st.title("⚡ Demo Sandbox Control")
-    st.markdown("Easily demonstrate **BEFORE** (403 Blocked) vs **AFTER** (200 Optimized) live during pitches.")
+    st.title("⚡ Settings & Controls")
+    
+    st.markdown("### 🔑 Gemini AI Key")
+    env_key = os.getenv("GEMINI_API_KEY", "")
+    gemini_key_input = st.text_input(
+        "Enter Gemini API Key:",
+        value=env_key,
+        type="password",
+        help="Optional: Powers AI-synthesized remediation and custom code fixes. If empty, the engine uses strict deterministic rule-based remediation."
+    )
+    if gemini_key_input:
+        st.success("✅ Gemini AI synthesis enabled")
+    else:
+        st.caption("ℹ️ Running in deterministic rule-based mode (No key required)")
+
+    st.divider()
+    st.markdown("### 🛠️ Demo Sandbox Control")
+    st.caption("Demonstrate **BEFORE** (403 Blocked) vs **AFTER** (200 Optimized) live during pitches.")
     
     current_mode = get_mode()
     if current_mode == "before":
@@ -396,11 +417,12 @@ if submit_button:
             elif base_status == 200 and not ai_blocked_any:
                 st.success("✅ **Consistent Access**: Both AI assistants and human browsers have unimpeded access.")
 
-        # Senior Remediation Engine (Kavish Gemini Remediation)
+        # Senior Remediation Engine (Gemini AI + Rule-based Engine)
         st.write("---")
         st.markdown("### 🛠️ AI Remediation & Fix Plan")
         
-        advice = generate_remediation(primary_res)
+        active_key = gemini_key_input.strip() if gemini_key_input else None
+        advice = generate_remediation(primary_res, api_key=active_key)
         
         st.markdown("#### 🔍 Problem Detected")
         st.error(advice.get("problem_detected", "Unknown Issue"))
