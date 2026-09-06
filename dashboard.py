@@ -5,12 +5,14 @@ import pandas as pd
 
 from crawler import crawl_sync, crawl_all_sync, crawl_with_baseline_sync, list_personas
 from remediation import generate_remediation
+from sandbox.server import start_sandbox, set_mode, get_mode
 
 # Page configuration
 st.set_page_config(
     page_title="AI Accessibility Auditor",
     page_icon="🤖",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # Custom Styling
@@ -101,6 +103,39 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# Start Sandbox Server for live demo switching
+sandbox_url = start_sandbox(port=5050)
+
+# Sidebar: Demo Sandbox Switcher
+with st.sidebar:
+    st.title("⚡ Demo Sandbox Control")
+    st.markdown("Easily demonstrate **BEFORE** (403 Blocked) vs **AFTER** (200 Optimized) live during pitches.")
+    
+    current_mode = get_mode()
+    if current_mode == "before":
+        st.error("Sandbox: **BEFORE Mode** (Simulated AI Block 403)")
+    else:
+        st.success("Sandbox: **AFTER Mode** (Optimized 200 OK)")
+
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("🔴 Set BEFORE", use_container_width=True):
+            set_mode("before")
+            st.rerun()
+    with col_btn2:
+        if st.button("🟢 Set AFTER", use_container_width=True):
+            set_mode("after")
+            st.rerun()
+
+    st.caption(f"Sandbox Server running on: `{sandbox_url}`")
+    st.divider()
+    st.markdown("### 🎯 Quick Presets")
+    quick_choice = st.selectbox(
+        "Load URL Preset:",
+        ["None", "Demo Sandbox", "https://example.com", "https://wikipedia.org"],
+        index=0
+    )
+
 # App Header
 st.markdown('<div class="main-title">AI Accessibility Auditor</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Multi-Persona AI Crawler Compatibility, WAF Challenge, & Bot Management Auditor</div>', unsafe_allow_html=True)
@@ -109,11 +144,18 @@ st.markdown('<div class="sub-title">Multi-Persona AI Crawler Compatibility, WAF 
 available_personas = list_personas()
 ai_persona_keys = [p["id"] for p in available_personas if p["is_ai_agent"]]
 
+initial_url = ""
+if quick_choice == "Demo Sandbox":
+    initial_url = sandbox_url
+elif quick_choice != "None":
+    initial_url = quick_choice
+
 with st.form("audit_form"):
     col1, col2 = st.columns([2.5, 1.5])
     with col1:
         url_input = st.text_input(
             "Enter website:",
+            value=initial_url,
             placeholder="https://example.com",
             help="Provide the target domain or URL"
         )
