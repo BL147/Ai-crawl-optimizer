@@ -5,12 +5,14 @@ import pandas as pd
 
 from crawler import crawl_sync, crawl_all_sync, crawl_with_baseline_sync, list_personas
 from remediation import generate_remediation
+from sandbox.server import start_sandbox, set_mode, get_mode
 
 # Page configuration
 st.set_page_config(
     page_title="AI Accessibility Auditor",
     page_icon="🤖",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
 # Custom Styling
@@ -101,6 +103,60 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Start Sandbox Server for live demo switching
+sandbox_url = start_sandbox(port=5050)
+
+# Sidebar: Controls & API Key Configuration
+with st.sidebar:
+    st.title("⚡ Settings & Controls")
+    
+    st.markdown("### 🔑 Gemini AI Key")
+    env_key = os.getenv("GEMINI_API_KEY", "")
+    gemini_key_input = st.text_input(
+        "Enter Gemini API Key:",
+        value=env_key,
+        type="password",
+        help="Optional: Powers AI-synthesized remediation and custom code fixes. If empty, the engine uses strict deterministic rule-based remediation."
+    )
+    if gemini_key_input:
+        st.success("✅ Gemini AI synthesis enabled")
+    else:
+        st.caption("ℹ️ Running in deterministic rule-based mode (No key required)")
+
+    st.divider()
+    st.markdown("### 🛠️ Demo Sandbox Control")
+    st.caption("Demonstrate **BEFORE** (403 Blocked) vs **AFTER** (200 Optimized) live during pitches.")
+    
+    current_mode = get_mode()
+    if current_mode == "before":
+        st.error("Sandbox: **BEFORE Mode** (Simulated AI Block 403)")
+    else:
+        st.success("Sandbox: **AFTER Mode** (Optimized 200 OK)")
+
+    col_btn1, col_btn2 = st.columns(2)
+    with col_btn1:
+        if st.button("🔴 Set BEFORE", use_container_width=True):
+            set_mode("before")
+            st.rerun()
+    with col_btn2:
+        if st.button("🟢 Set AFTER", use_container_width=True):
+            set_mode("after")
+            st.rerun()
+
+    st.caption(f"Sandbox Server running on: `{sandbox_url}`")
+    st.divider()
+    st.markdown("### 🎯 Quick Presets")
+    quick_choice = st.selectbox(
+        "Load URL Preset:",
+        ["None", "Demo Sandbox", "https://example.com", "https://wikipedia.org"],
+        index=0
+    )
+
 # App Header
 st.markdown('<div class="main-title">AI Accessibility Auditor</div>', unsafe_allow_html=True)
 st.markdown('<div class="sub-title">Multi-Persona AI Crawler Compatibility, WAF Challenge, & Bot Management Auditor</div>', unsafe_allow_html=True)
@@ -109,11 +165,18 @@ st.markdown('<div class="sub-title">Multi-Persona AI Crawler Compatibility, WAF 
 available_personas = list_personas()
 ai_persona_keys = [p["id"] for p in available_personas if p["is_ai_agent"]]
 
+initial_url = ""
+if quick_choice == "Demo Sandbox":
+    initial_url = sandbox_url
+elif quick_choice != "None":
+    initial_url = quick_choice
+
 with st.form("audit_form"):
     col1, col2 = st.columns([2.5, 1.5])
     with col1:
         url_input = st.text_input(
             "Enter website:",
+            value=initial_url,
             placeholder="https://example.com",
             help="Provide the target domain or URL"
         )
@@ -354,11 +417,12 @@ if submit_button:
             elif base_status == 200 and not ai_blocked_any:
                 st.success("✅ **Consistent Access**: Both AI assistants and human browsers have unimpeded access.")
 
-        # Senior Remediation Engine (Kavish Gemini Remediation)
+        # Senior Remediation Engine (Gemini AI + Rule-based Engine)
         st.write("---")
         st.markdown("### 🛠️ AI Remediation & Fix Plan")
         
-        advice = generate_remediation(primary_res)
+        active_key = gemini_key_input.strip() if gemini_key_input else None
+        advice = generate_remediation(primary_res, api_key=active_key)
         
         st.markdown("#### 🔍 Problem Detected")
         st.error(advice.get("problem_detected", "Unknown Issue"))
