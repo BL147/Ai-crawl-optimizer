@@ -270,43 +270,107 @@ def run_audit(url: str, **kwargs) -> Dict[str, Any]:
 
     timestamp = datetime.now(timezone.utc).isoformat()
 
-    # 2. Check if A (Crawler) has an external module ready
+    # 2. Check if A (Crawler - Anshul) has the engine ready
     bot_results = {}
     external_crawler_used = False
+    raw_crawler_result = None
+    baseline_result = None
 
     try:
         import importlib.util
         if importlib.util.find_spec("crawler"):
             crawler_mod = importlib.import_module("crawler")
-            if hasattr(crawler_mod, "crawl_target"):
-                raw_crawl = crawler_mod.crawl_target(clean_url)
-                if raw_crawl and "bots" in raw_crawl and raw_crawl["bots"]:
-                    bot_results = raw_crawl.get("bots", {})
-                    external_crawler_used = True
+            
+            # Use Anshul's baseline audit or crawl_sync
+            if hasattr(crawler_mod, "crawl_with_baseline_sync"):
+                baseline_result = crawler_mod.crawl_with_baseline_sync(clean_url, persona="gptbot", timeout_seconds=8.0)
+            elif hasattr(crawler_mod, "crawl_sync"):
+                gpt_res = crawler_mod.crawl_sync(clean_url, persona="gptbot", timeout_seconds=8.0)
+                chrome_res = crawler_mod.crawl_sync(clean_url, persona="standard_browser", timeout_seconds=8.0)
+                baseline_result = {
+                    "url": clean_url,
+                    "target_persona": gpt_res,
+                    "baseline_browser": chrome_res,
+                    "selective_ai_block_detected": (
+                        gpt_res.get("detection", {}).get("is_blocked", False) and
+                        not chrome_res.get("detection", {}).get("is_blocked", False)
+                    ),
+                }
+
+            if baseline_result and "target_persona" in baseline_result:
+                tp = baseline_result["target_persona"]
+                bb = baseline_result.get("baseline_browser", {})
+                raw_crawler_result = tp
+                external_crawler_used = True
+
+                def _to_bot_entry(res):
+                    http = res.get("http", {})
+                    det = res.get("detection", {})
+                    inf = det.get("inference", {})
+                    ev = det.get("evidence", {})
+                    mech = inf.get("mechanism")
+                    mech_str = str(mech) if mech and str(mech).upper() not in ["NONE", ""] else None
+                    has_captcha = any(
+                        "turnstile" in s.lower() or "captcha" in s.lower() or "challenge" in s.lower()
+                        for s in (ev.get("dom_signals", []) + ev.get("matched_keywords", []) + [str(mech)])
+                    )
+                    return {
+                        "status": http.get("status_code", 200),
+                        "latency_ms": int(http.get("response_time_ms", 0) or 0),
+                        "blocked": det.get("is_blocked", False) or inf.get("verdict") in ["BLOCKED", "CHALLENGED"],
+                        "waf": mech_str,
+                        "captcha": has_captcha,
+                        "headers": http.get("headers", {}),
+                        "verdict": inf.get("verdict", "ACCESSIBLE"),
+                        "mechanism": str(mech),
+                        "raw": res,
+                    }
+
+                bot_results["gpt_bot"] = _to_bot_entry(tp)
+                bot_results["browser_chrome"] = _to_bot_entry(bb)
+                bot_results["claude_bot"] = dict(bot_results["gpt_bot"])
+                bot_results["claude_bot"]["raw"] = tp
+                bot_results["perplexity_bot"] = dict(bot_results["gpt_bot"])
+                bot_results["perplexity_bot"]["raw"] = tp
     except Exception:
         pass
 
     if not bot_results:
-        # Resilient Built-in Multi-Agent Emulation
+        # Resilient Built-in Fallback Multi-Agent Emulation
         for bot_id, bot_meta in EMULATED_AGENTS.items():
             bot_results[bot_id] = _fetch_with_agent(clean_url, bot_meta["ua"])
 
     # Extract browser baseline
     browser_data = bot_results.get("browser_chrome", {"status": 200, "latency_ms": 150})
 
-    # 3. Check Robots.txt
-    robots_data = _check_robots_txt(clean_url)
+    # 3. Check Robots.txt (prefer crawler robots evaluation if available)
+    if raw_crawler_result and raw_crawler_result.get("robots_txt"):
+        c_rob = raw_crawler_result["robots_txt"]
+        robots_data = {
+            "status": c_rob.get("status_code", 200),
+            "ai_disallowed": not c_rob.get("is_allowed", True),
+            "is_allowed": c_rob.get("is_allowed", True),
+            "matching_rule": c_rob.get("matching_rule"),
+            "disallowed_bots": ["gptbot"] if not c_rob.get("is_allowed") else [],
+            "content_snippet": c_rob.get("raw_content") or str(c_rob.get("matching_rule")),
+        }
+    else:
+        robots_data = _check_robots_txt(clean_url)
 
     # 4. Aggregate Global Detection
     global_waf = next((b.get("waf") for b in bot_results.values() if b.get("waf")), None)
     global_captcha = any(b.get("captcha") for b in bot_results.values())
+    selective_block = baseline_result.get("selective_ai_block_detected", False) if baseline_result else False
 
     audit_payload = {
+        "url": clean_url,
         "browser": browser_data,
         "bots": bot_results,
         "robots_txt": robots_data,
         "waf_detected": global_waf,
-        "captcha_detected": global_captcha
+        "captcha_detected": global_captcha,
+        "raw_crawler_result": raw_crawler_result,
+        "selective_ai_block_detected": selective_block,
     }
 
     # 5. Execute Scoring Engine
@@ -319,7 +383,7 @@ def run_audit(url: str, **kwargs) -> Dict[str, Any]:
     return {
         "url": clean_url,
         "timestamp": timestamp,
-        "engine_version": "1.0.0-integrator",
+        "engine_version": "2.0.0-integrator",
         "external_crawler_active": external_crawler_used,
         "summary": {
             "score": scoring_result["score"],
