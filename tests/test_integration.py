@@ -292,5 +292,62 @@ class TestCrawlerRemediationIntegration(unittest.TestCase):
         self.assertIn("noindex", result["problem"].lower())
 
 
+    def test_actual_crawler_sync_live_execution(self):
+        """
+        Checkpoint 2 Live Integration:
+        Executes Anshul's real crawl_sync(...) function with an actual test target,
+        passes the real CrawlResult output directly into generate_remediation(...),
+        and verifies the resulting remediation structure.
+        """
+        from crawler import crawl_sync
+
+        # Safe, stable target containing rendered title, meta tags, and body text
+        target_url = (
+            "data:text/html,<html><head><title>Integration Test Page</title>"
+            "<meta name='robots' content='index, follow'></head>"
+            "<body><h1>AI Crawl Optimizer Test</h1>"
+            "<p>Accessible content for automated AI crawler verification.</p></body></html>"
+        )
+
+        # 1. Execute Anshul's actual crawler
+        real_crawl_result = crawl_sync(target_url, persona="gptbot")
+
+        # 2. Verify real crawler output properties
+        self.assertIsInstance(real_crawl_result, dict)
+        self.assertEqual(real_crawl_result.get("target_url"), target_url)
+        self.assertEqual(real_crawl_result.get("persona"), "gptbot")
+        self.assertIn("detection", real_crawl_result)
+        self.assertIn("inference", real_crawl_result["detection"])
+        self.assertEqual(real_crawl_result["detection"]["inference"].get("verdict"), "ACCESSIBLE")
+
+        # 3. Pass REAL crawler output directly into generate_remediation
+        remediation_result = generate_remediation(real_crawl_result)
+
+        # 4. Verify predictable output structure with all required fields
+        self.assertIsInstance(remediation_result, dict)
+        self.assertIn("problem", remediation_result)
+        self.assertIn("evidence", remediation_result)
+        self.assertIn("why_it_affects_ai_crawling", remediation_result)
+        self.assertIn("recommended_fix", remediation_result)
+        self.assertIn("code_or_config", remediation_result)
+        self.assertIn("validation_steps", remediation_result)
+
+        # 5. Verify backwards-compatible alias fields
+        self.assertIn("problem_detected", remediation_result)
+        self.assertIn("code_or_configuration_change", remediation_result)
+        self.assertIn("before_after_example", remediation_result)
+        self.assertIn("uncertainty", remediation_result)
+
+        # 6. Verify non-empty meaningful content
+        self.assertTrue(len(remediation_result["problem"]) > 0)
+        self.assertTrue(len(remediation_result["evidence"]) > 0)
+        self.assertTrue(len(remediation_result["recommended_fix"]) > 0)
+        self.assertTrue(len(remediation_result["validation_steps"]) > 0)
+
+        # 7. Grounding verification: clean accessible target must not invent WAF / blocks
+        self.assertNotIn("cloudflare", remediation_result["problem"].lower())
+        self.assertNotIn("blocked", remediation_result["problem"].lower())
+
+
 if __name__ == "__main__":
     unittest.main()
