@@ -32,6 +32,7 @@ def _scoring_payload(crawl_result: Dict[str, Any], baseline: Optional[Dict[str, 
     blocked = bool(detection.get("is_blocked")) or (
         status_code in {401, 429} and verdict != "INCONCLUSIVE"
     )
+    scoring_status = 0 if status_code == 403 and verdict == "INCONCLUSIVE" else status_code
     latency = http.get("response_time_ms") or 0
 
     baseline_http = (baseline or {}).get("http", {})
@@ -43,7 +44,7 @@ def _scoring_payload(crawl_result: Dict[str, Any], baseline: Optional[Dict[str, 
         "browser": {"status": browser_status or 0, "latency_ms": browser_latency or 0},
         "bots": {
             crawl_result.get("persona", "ai_crawler"): {
-                "status": status_code or 0,
+                "status": scoring_status or 0,
                 "latency_ms": latency,
                 "blocked": blocked,
                 "waf": mechanism if mechanism in _CHALLENGE_MECHANISMS else None,
