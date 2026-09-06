@@ -1,0 +1,140 @@
+"""AI Crawl Optimizer - Crawler & Bot-Block Detection Module.
+
+Exports:
+    crawl_url: Asynchronous crawl function returning structured dict.
+    crawl_sync: Synchronous crawl wrapper returning structured dict.
+    crawl_all_personas: Asynchronous crawl across multiple bot personas.
+    crawl_with_baseline: Audits an AI persona and compares against a standard browser baseline.
+    list_personas: List all available crawler personas.
+    get_persona: Retrieve persona metadata by identifier.
+    CrawlerEngine: The underlying Playwright engine.
+    CrawlResult: Pydantic model for results.
+    BlockType: Enumeration of detected block types.
+"""
+
+import asyncio
+from typing import Any, Dict, List, Optional
+
+from crawler.engine import CrawlerEngine
+from crawler.models import BlockType, CrawlResult
+from crawler.personas import CrawlerPersona, get_persona, list_personas, PERSONAS
+from crawler.detector import BotBlockDetector
+from crawler.robots import inspect_robots
+
+
+async def crawl_url(
+    url: str,
+    persona: str = "gptbot",
+    headless: bool = True,
+    timeout_seconds: float = 15.0,
+    wait_after_load_ms: int = 1500,
+) -> Dict[str, Any]:
+    """
+    Crawl a URL with a specific persona asynchronously.
+    Returns a JSON-serializable dictionary matching the unified audit schema.
+    """
+    engine = CrawlerEngine(headless=headless)
+    result: CrawlResult = await engine.crawl(
+        url=url,
+        persona_name=persona,
+        timeout_seconds=timeout_seconds,
+        wait_after_load_ms=wait_after_load_ms,
+    )
+    return result.to_dict()
+
+
+def crawl_sync(
+    url: str,
+    persona: str = "gptbot",
+    headless: bool = True,
+    timeout_seconds: float = 15.0,
+    wait_after_load_ms: int = 1500,
+) -> Dict[str, Any]:
+    """
+    Synchronous wrapper for crawl_url, suitable for Streamlit or synchronous orchestration.
+    """
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            # If called inside an existing event loop (e.g. some Streamlit contexts), run in a separate thread
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                return pool.submit(
+                    asyncio.run,
+                    crawl_url(url, persona, headless, timeout_seconds, wait_after_load_ms),
+                ).result()
+        else:
+            return loop.run_until_complete(
+                crawl_url(url, persona, headless, timeout_seconds, wait_after_load_ms)
+            )
+    except RuntimeError:
+        return asyncio.run(
+            crawl_url(url, persona, headless, timeout_seconds, wait_after_load_ms)
+        )
+
+
+async def crawl_all_personas(
+    url: str,
+    personas: Optional[List[str]] = None,
+    headless: bool = True,
+    timeout_seconds: float = 15.0,
+) -> List[Dict[str, Any]]:
+    """
+    Audit a URL across multiple AI agent personas.
+    If personas is None, audits all default AI personas.
+    """
+    target_personas = personas or [p for p, data in PERSONAS.items() if data.is_ai_agent]
+    engine = CrawlerEngine(headless=headless)
+    results = []
+    for p in target_personas:
+        res = await engine.crawl(url=url, persona_name=p, timeout_seconds=timeout_seconds)
+        results.append(res.to_dict())
+    return results
+
+
+async def crawl_with_baseline(
+    url: str,
+    persona: str = "gptbot",
+    headless: bool = True,
+    timeout_seconds: float = 15.0,
+) -> Dict[str, Any]:
+    """
+    Audit both the requested AI persona and the standard desktop browser baseline,
+    determining if the site selectively blocks AI agents.
+    """
+    engine = CrawlerEngine(headless=headless)
+    ai_result = await engine.crawl(url=url, persona_name=persona, timeout_seconds=timeout_seconds)
+    baseline_result = await engine.crawl(
+        url=url, persona_name="standard_browser", timeout_seconds=timeout_seconds
+    )
+
+    ai_dict = ai_result.to_dict()
+    baseline_dict = baseline_result.to_dict()
+
+    selective_block = (
+        ai_result.detection.is_blocked and not baseline_result.detection.is_blocked
+    ) or (
+        not ai_result.robots_txt.is_allowed and baseline_result.robots_txt.is_allowed
+    )
+
+    return {
+        "url": url,
+        "target_persona": ai_dict,
+        "baseline_browser": baseline_dict,
+        "selective_ai_block_detected": selective_block,
+    }
+
+
+__all__ = [
+    "crawl_url",
+    "crawl_sync",
+    "crawl_all_personas",
+    "crawl_with_baseline",
+    "list_personas",
+    "get_persona",
+    "CrawlerEngine",
+    "CrawlResult",
+    "BlockType",
+    "BotBlockDetector",
+    "inspect_robots",
+]
