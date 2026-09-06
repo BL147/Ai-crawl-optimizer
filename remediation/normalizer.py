@@ -76,10 +76,19 @@ def normalize_crawler_result(result: Any) -> NormalizedAudit:
             raw = result.to_dict()
         except Exception:
             raw = {}
+    elif hasattr(result, "model_dump") and callable(result.model_dump):
+        try:
+            raw = result.model_dump(mode="json")
+        except Exception:
+            raw = {}
     elif isinstance(result, dict):
         raw = dict(result)
     else:
         raw = {}
+
+    # If a baseline comparison dictionary is passed, extract target_persona
+    if "target_persona" in raw and isinstance(raw["target_persona"], dict):
+        raw = dict(raw["target_persona"])
 
     target_url = str(raw.get("target_url") or "")
     persona = str(raw.get("persona") or "unknown")
@@ -151,8 +160,11 @@ def normalize_crawler_result(result: Any) -> NormalizedAudit:
     ev_dom = [str(x) for x in ev_dict.get("dom_signals", []) if x]
     ev_keywords = [str(x) for x in ev_dict.get("matched_keywords", []) if x]
 
-    verdict = str(inf_dict.get("verdict") or d_dict.get("verdict") or "ACCESSIBLE").upper()
-    mechanism = str(inf_dict.get("mechanism") or d_dict.get("block_type") or "NONE").upper()
+    verdict_val = inf_dict.get("verdict") or d_dict.get("verdict") or "ACCESSIBLE"
+    verdict = str(getattr(verdict_val, "value", verdict_val)).upper()
+
+    mech_val = inf_dict.get("mechanism") or d_dict.get("block_type") or "NONE"
+    mechanism = str(getattr(mech_val, "value", mech_val)).upper()
     try:
         confidence = float(inf_dict.get("confidence", d_dict.get("confidence", 0.0)))
     except (ValueError, TypeError):
@@ -238,11 +250,17 @@ def normalize_crawler_result(result: Any) -> NormalizedAudit:
         is_inconclusive_403 = False
 
     # Priority 6: Inconclusive HTTP 403 Forbidden
-    # Triggered when status is 403 or mechanism is HTTP_FORBIDDEN without explicit anti-bot evidence
+    # Triggered when status is 403 or mechanism is HTTP_FORBIDDEN without explicit anti-bot evidence,
+    # or whenever the crawler verdict is explicitly INCONCLUSIVE.
     elif (
-        (effective_status == 403 or mechanism in ("HTTP_FORBIDDEN", "HTTP_403_FORBIDDEN"))
-        and (verdict == "INCONCLUSIVE" or not ev_dom and not ev_headers and not ev_keywords)
-        and mechanism not in ("CLOUDFLARE_CHALLENGE", "CLOUDFLARE_BLOCK", "DATADOME", "PERIMETERX", "AKAMAI", "AWS_WAF", "RECAPTCHA", "HCAPTCHA", "CUSTOM_BOT_BLOCK")
+        verdict == "INCONCLUSIVE"
+        or (
+            (effective_status == 403 or mechanism in ("HTTP_FORBIDDEN", "HTTP_403_FORBIDDEN"))
+            and mechanism not in (
+                "CLOUDFLARE_CHALLENGE", "CLOUDFLARE_BLOCK", "DATADOME", "PERIMETERX",
+                "AKAMAI", "AWS_WAF", "RECAPTCHA", "HCAPTCHA", "CUSTOM_BOT_BLOCK"
+            )
+        )
     ):
         issue_type = IssueType.INCONCLUSIVE_HTTP_403
         is_inconclusive_403 = True

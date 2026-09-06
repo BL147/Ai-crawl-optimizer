@@ -31,10 +31,12 @@ class RemediationResult:
     def to_dict(self) -> Dict[str, Any]:
         """Convert to a clean JSON-serializable dictionary for Streamlit UI or API consumers."""
         return {
+            "problem": self.problem_detected,
             "problem_detected": self.problem_detected,
             "evidence": list(self.evidence),
             "why_it_affects_ai_crawling": self.why_it_affects_ai_crawling,
             "recommended_fix": self.recommended_fix,
+            "code_or_config": self.code_or_configuration_change,
             "code_or_configuration_change": self.code_or_configuration_change,
             "before_after_example": dict(self.before_after_example),
             "validation_steps": list(self.validation_steps),
