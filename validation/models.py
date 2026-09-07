@@ -30,7 +30,8 @@ class FixStatus(str, Enum):
 
 
 class IssueCategory(str, Enum):
-    """Categories of crawlability issues."""
+    """Categories of crawlability and security restriction issues."""
+    # Phase 2 Optimization (RESTRICTED -> ACCESSIBLE)
     ROBOTS_TXT = "ROBOTS_TXT"
     WAF_CHALLENGE = "WAF_CHALLENGE"
     CAPTCHA = "CAPTCHA"
@@ -41,10 +42,18 @@ class IssueCategory(str, Enum):
     SELECTIVE_BLOCK = "SELECTIVE_BLOCK"
     OTHER = "OTHER"
 
+    # Phase 3 Security Enforcement (ACCESSIBLE -> INTENTIONALLY RESTRICTED)
+    AI_ROBOTS_RESTRICTION = "AI_ROBOTS_RESTRICTION"
+    AI_RATE_LIMIT = "AI_RATE_LIMIT"
+    AI_WAF_CHALLENGE = "AI_WAF_CHALLENGE"
+    AI_CAPTCHA = "AI_CAPTCHA"
+    AI_AUTHENTICATION = "AI_AUTHENTICATION"
+
 
 class TargetIssue(BaseModel):
     """
     Specification of the specific issue targeted for validation.
+    Supports both Phase 2 optimization (removing barriers) and Phase 3 security (enforcing barriers).
     """
     category: IssueCategory = IssueCategory.OTHER
     persona: Optional[str] = None
@@ -52,6 +61,22 @@ class TargetIssue(BaseModel):
     expected_resolved_state: Optional[str] = None
     description: Optional[str] = None
     threshold: Optional[float] = None  # e.g., max acceptable latency in ms
+    is_security_restriction: bool = False
+    # Phase 3 policies can require that named non-target personas remain usable.
+    # These are evaluated from actual post-control crawler observations.
+    target_personas: List[str] = Field(default_factory=list)
+    allowed_personas: List[str] = Field(default_factory=list)
+
+    @property
+    def is_security(self) -> bool:
+        """Indicates if this target issue represents a security enforcement policy."""
+        return self.is_security_restriction or self.category in (
+            IssueCategory.AI_ROBOTS_RESTRICTION,
+            IssueCategory.AI_RATE_LIMIT,
+            IssueCategory.AI_WAF_CHALLENGE,
+            IssueCategory.AI_CAPTCHA,
+            IssueCategory.AI_AUTHENTICATION,
+        )
 
 
 class ValidationResult(BaseModel):
