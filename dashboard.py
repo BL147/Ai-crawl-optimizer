@@ -11,6 +11,7 @@ from crawler import list_personas
 from orchestration import run_audit
 from scoring import calculate_score
 from fix_engine import apply_fix, get_default_registry, is_controlled_test_environment
+from fix_engine.engine import FixApplicationEngine
 from validation import compare_and_validate, ValidationStatus, FixStatus, TargetIssue, IssueCategory
 
 # -----------------------------------------------------------------------------
@@ -687,6 +688,14 @@ with st.form("audit_config_form"):
     </div>
     """, unsafe_allow_html=True)
 
+    security_mode = st.radio(
+        "AI SECURITY / RESTRICTION",
+        options=["AI ACCESSIBILITY", "AI RESTRICTION"],
+        horizontal=True,
+        help="Accessibility evaluates how AI crawlers can reach your site. Restriction presents evidence-based controls and guidance.",
+    )
+    st.caption("Control how AI crawlers interact with your website.")
+
     col_url, col_mode = st.columns([3, 2])
     with col_url:
         url_input = st.text_input(
@@ -738,7 +747,11 @@ with st.form("audit_config_form"):
         st.caption("Compare AI crawler behavior against a standard browser to detect selective blocking.")
 
     st.markdown("<div style=\"margin-top: 0.5rem;\"></div>", unsafe_allow_html=True)
-    submit_button = st.form_submit_button("⚡ Run AI Accessibility Audit", type="primary", use_container_width=True)
+    submit_button = st.form_submit_button(
+        "⚡ Run AI Accessibility Audit" if security_mode == "AI ACCESSIBILITY" else "⚡ Run AI Restriction Audit",
+        type="primary",
+        use_container_width=True,
+    )
 
 # -----------------------------------------------------------------------------
 # SUPPORTED AI CRAWLERS (CHIPS GRID - DYNAMIC FROM REGISTRY)
@@ -777,6 +790,85 @@ def normalize_url(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     return url
+
+
+def _restriction_status(result: Dict[str, Any]) -> str:
+    """Translate existing crawler evidence into the Phase 3 restriction language."""
+    http_status = result.get("http", {}).get("status_code")
+    inference = result.get("detection", {}).get("inference", {})
+    verdict = str(inference.get("verdict", "")).upper()
+    mechanism = str(inference.get("mechanism", "")).upper()
+
+    if http_status == 429 or mechanism == "RATE_LIMIT":
+        return "AI Requests Rate Limited / Blocked"
+    if verdict == "CHALLENGED" or mechanism in {"CAPTCHA", "CLOUDFLARE_CHALLENGE"}:
+        return "AI Verification Required"
+    if result.get("robots_txt", {}).get("is_allowed") is False or verdict == "BLOCKED":
+        return "AI Crawl Restricted"
+    if verdict == "ACCESSIBLE" or (http_status and 200 <= http_status < 300):
+        return "AI Accessible"
+    return "INCONCLUSIVE"
+
+
+def _render_restriction_mode(
+    audit_url: str,
+    results: List[Dict[str, Any]],
+    registry: Any,
+) -> None:
+    """Render Phase 3 using registry/capability evidence only; never mutates a target."""
+    controlled = is_controlled_test_environment(audit_url, registry)
+    st.markdown("<div id=\"phase3-section\"></div>", unsafe_allow_html=True)
+    st.markdown("### AI SECURITY / RESTRICTION")
+    st.caption("Control how AI crawlers interact with your website.")
+
+    exposure_rows = [
+        {
+            "AI crawler": result.get("persona", "Unknown").replace("_", " ").title(),
+            "Observed status": _restriction_status(result),
+            "HTTP": result.get("http", {}).get("status_code") or "Unavailable",
+        }
+        for result in results
+    ]
+    st.dataframe(pd.DataFrame(exposure_rows), use_container_width=True, hide_index=True)
+
+    if not controlled:
+        st.warning("Direct changes are available only for registered controlled environments.")
+        st.markdown("#### AI crawl and security recommendations")
+        recommendations = [
+            ("Robots.txt restriction", "Add crawler-specific Disallow directives to robots.txt.", "Helps compliant crawlers honor an explicit crawl policy."),
+            ("AI rate limiting", "Configure AI bot rate limits through your CDN, WAF, or application layer.", "Helps limit automated request volume."),
+            ("WAF challenge", "Configure a bot-management challenge in your WAF.", "Helps require verification before requests are served."),
+            ("CAPTCHA", "Add CAPTCHA/bot verification through your WAF or application layer.", "Helps distinguish verified visitors from automated traffic."),
+            ("Authentication", "Require authentication for content that should not be publicly crawled.", "Helps protect access-controlled content."),
+        ]
+        for name, recommendation, why in recommendations:
+            with st.expander(f"{name} — Recommendation Only"):
+                st.markdown(f"**Recommended restriction:** {recommendation}")
+                st.markdown(f"**Why it helps:** {why}")
+        return
+
+    env = registry.get(audit_url)
+    environment_name = env.description if env else "CineStream controlled environment"
+    supported_fixes = set(FixApplicationEngine(registry=registry).get_supported_fixes())
+    st.success(f"SUPPORTED / CONTROLLED environment: {environment_name}")
+    st.markdown("#### Detected AI exposure ↓ Restriction Controls")
+    st.caption(
+        "Capability labels come from the registered backend. No control below can change a website unless the existing backend supports that restriction operation."
+    )
+
+    controls = [
+        ("Robots.txt restriction", "RECOMMENDATION ONLY", "The registered robots.txt handler only permits AI access; it does not apply a restrictive policy."),
+        ("AI rate limiting", "RECOMMENDATION ONLY", "No registered rate-limiting restriction handler is available."),
+        ("WAF challenge", "RECOMMENDATION ONLY", "No registered WAF challenge restriction handler is available."),
+        ("CAPTCHA simulation", "RECOMMENDATION ONLY", "No registered CAPTCHA simulation restriction handler is available."),
+        ("Authentication", "RECOMMENDATION ONLY", "No registered authentication restriction handler is available."),
+    ]
+    for name, label, detail in controls:
+        st.markdown(f"- **{name}** — `{label}`: {detail}")
+
+    st.info(
+        "No executable Apply Restriction, Remove Restriction, or restriction validation action is shown because the existing backend does not support a reversible restriction operation. "
+        f"Current registered fix capabilities: {', '.join(sorted(supported_fixes)) or 'none'}.")
 
 
 def _build_aggregate_payload(results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -999,6 +1091,7 @@ if submit_button:
     else:
         norm_url = normalize_url(url_input)
         st.session_state["target_input"] = norm_url
+        st.session_state["audit_security_mode"] = security_mode
 
         progress_slot = st.empty()
         with progress_slot.container():
@@ -1067,6 +1160,7 @@ if submit_button:
 if "audit_results" in st.session_state:
     results: List[Dict[str, Any]] = st.session_state["audit_results"]
     audit_url = st.session_state.get("audit_url", "")
+    active_security_mode = st.session_state.get("audit_security_mode", "AI ACCESSIBILITY")
     primary_res = results[0]
     baseline_result = primary_res.get("baseline")
 
@@ -1513,6 +1607,13 @@ if "audit_results" in st.session_state:
     st.markdown("<div id=\"phase2-section\"></div>", unsafe_allow_html=True)
     
     registry = get_default_registry()
+    if active_security_mode == "AI RESTRICTION":
+        _render_restriction_mode(audit_url, results, registry)
+        # Restriction actions must be backed by a registered backend capability.
+        # This intentionally prevents the accessibility fix UI from being used as
+        # a restriction control.
+        st.stop()
+
     if not is_controlled_test_environment(audit_url, registry):
         st.info(
             "Phase 2 fix application is available only for the registered local "
