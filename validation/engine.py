@@ -98,7 +98,40 @@ class FixValidationEngine:
         # 5. Route to Issue-Specific Comparators
         category = resolved_target.category
 
-        if category == IssueCategory.ROBOTS_TXT:
+        # Phase 3 Security Restriction Comparators (ACCESSIBLE -> INTENTIONALLY RESTRICTED)
+        if category == IssueCategory.AI_ROBOTS_RESTRICTION:
+            result = cls._validate_security_robots_restriction(
+                audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+            )
+        elif category == IssueCategory.AI_RATE_LIMIT:
+            result = cls._validate_security_rate_limit(
+                audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+            )
+        elif category == IssueCategory.AI_WAF_CHALLENGE:
+            result = cls._validate_security_waf_challenge(
+                audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+            )
+        elif category == IssueCategory.AI_CAPTCHA:
+            result = cls._validate_security_captcha(
+                audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+            )
+        elif category == IssueCategory.AI_AUTHENTICATION:
+            result = cls._validate_security_authentication(
+                audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+            )
+
+        if category in (
+            IssueCategory.AI_ROBOTS_RESTRICTION,
+            IssueCategory.AI_RATE_LIMIT,
+            IssueCategory.AI_WAF_CHALLENGE,
+            IssueCategory.AI_CAPTCHA,
+            IssueCategory.AI_AUTHENTICATION,
+        ):
+            result = cls._apply_target_persona_guard(result, audit_after, resolved_target)
+            return cls._apply_collateral_guard(result, audit_after, resolved_target)
+
+        # Phase 2 Optimization Comparators (RESTRICTED -> ACCESSIBLE)
+        elif category == IssueCategory.ROBOTS_TXT:
             return cls._validate_robots_fix(
                 audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
             )
@@ -157,12 +190,13 @@ class FixValidationEngine:
         3. Audit again with the SAME Phase 1 crawler (or consume provided audit_after).
         4. Validate issue-specifically.
         """
-        # Import Phase 1 orchestrator dynamically to reuse without duplication
-        from orchestrator import run_audit
-
         # Step 1: Capture Baseline Audit if not provided
         if audit_before is None:
             try:
+                # Import only when a live Phase 1 crawl is required.  Snapshot
+                # comparison remains usable in service/test environments that do
+                # not install Playwright.
+                from orchestrator import run_audit
                 audit_before = run_audit(target_url, persona=persona, **crawl_options)
             except Exception as exc:
                 now_ts = datetime.now(timezone.utc).isoformat()
@@ -181,6 +215,28 @@ class FixValidationEngine:
                 )
 
         # Step 2: Apply Fix (or accept external fix_status)
+        # This engine never treats a public target as a writable sandbox.  Callers
+        # may still pass before/after observations from an externally managed
+        # deployment, but an in-process Phase 3 control action is local-only.
+        resolved_target = cls._resolve_target_issue(target_issue, cls._as_dict(audit_before))
+        if fix_action and resolved_target.is_security and not cls._is_controlled_target(target_url):
+            before_score = cls._extract_score(cls._as_dict(audit_before))
+            return ValidationResult(
+                before_score=before_score,
+                after_score=before_score,
+                score_delta=0,
+                issue_before=cls._summarize_issue(cls._as_dict(audit_before), target_issue),
+                issue_after="N/A",
+                fix_status=FixStatus.NOT_APPLICABLE.value,
+                validation_status=ValidationStatus.INCONCLUSIVE,
+                evidence=[
+                    "Phase 3 controls are only applied automatically to an explicit local/controlled sandbox target.",
+                    "No control action was run against the external/public target; provide externally collected after-audit evidence to validate it.",
+                ],
+                timestamp=datetime.now(timezone.utc).isoformat(),
+                target_url=target_url,
+                persona=persona,
+            )
         if fix_status is None:
             fix_status = FixStatus.APPLIED.value
             if fix_action:
@@ -197,6 +253,7 @@ class FixValidationEngine:
         # Step 3: Run Phase 1 Crawler Again if audit_after not provided
         if audit_after is None:
             try:
+                from orchestrator import run_audit
                 audit_after = run_audit(target_url, persona=persona, **crawl_options)
             except Exception as exc:
                 now_ts = datetime.now(timezone.utc).isoformat()
@@ -782,8 +839,804 @@ class FixValidationEngine:
         )
 
     # =========================================================================
+    # Phase 3 Security Restriction Comparators (ACCESSIBLE -> RESTRICTED)
+    # =========================================================================
+
+    @classmethod
+    def _validate_security_robots_restriction(
+        cls,
+        audit_before: Dict[str, Any],
+        audit_after: Dict[str, Any],
+        target: TargetIssue,
+        before_score: int,
+        after_score: int,
+        score_delta: int,
+        fix_status: str,
+        timestamp: str,
+    ) -> ValidationResult:
+        """
+        Validates Phase 3 Security Restriction: AI_ROBOTS_RESTRICTION.
+        Objective: ACCESSIBLE -> INTENTIONALLY RESTRICTED via robots.txt.
+        """
+        before_allowed, before_rule = cls._extract_robots_status(audit_before, target.persona)
+        after_allowed, after_rule = cls._extract_robots_status(audit_after, target.persona)
+
+        issue_before = {
+            "category": "AI_ROBOTS_RESTRICTION",
+            "is_allowed": before_allowed,
+            "matching_rule": before_rule or "None",
+            "status": "ALLOWED" if before_allowed else "RESTRICTED",
+        }
+        issue_after = {
+            "category": "AI_ROBOTS_RESTRICTION",
+            "is_allowed": after_allowed,
+            "matching_rule": after_rule or "None",
+            "status": "ALLOWED" if after_allowed else "RESTRICTED",
+        }
+
+        evidence: List[str] = []
+
+        # Check unchanged state
+        if before_allowed == after_allowed and before_rule == after_rule and before_score == after_score:
+            if before_allowed:
+                evidence.append("Result is completely UNCHANGED between baseline and post-enforcement audits.")
+                evidence.append(f"AI crawler REMAINS PERMITTED by robots.txt (rule: {after_rule or 'None'}).")
+                evidence.append("Expected robots.txt security restriction was not applied.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+
+        # Baseline was already restricted
+        if not before_allowed:
+            if not after_allowed:
+                evidence.append(
+                    f"Target security restriction (robots.txt disallow) was ALREADY active in baseline audit. "
+                    f"Crawler was already restricted (rule: {before_rule or 'None'})."
+                )
+                evidence.append(f"Post-enforcement observation: crawler remains restricted (rule: {after_rule or 'None'}).")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.VERIFIED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                    details={"already_restricted_in_baseline": True},
+                )
+            else:
+                evidence.append(f"Before: AI crawler was restricted (rule: {before_rule}).")
+                evidence.append(f"After: AI crawler became PERMITTED (rule: {after_rule or 'None'}).")
+                evidence.append("Security restriction failed: target became more permissive instead of restricted.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+
+        # Before was ALLOWED:
+        if not after_allowed:
+            evidence.append(f"Before: AI crawler was explicitly PERMITTED by robots.txt (rule: {before_rule or 'Allow: /'}).")
+            evidence.append(f"After: AI crawler is now INTENTIONALLY RESTRICTED by robots.txt (rule: {after_rule or 'Disallow: /'}).")
+            evidence.append(f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}).")
+            evidence.append("Robots.txt security restriction confirmed enforced per RFC 9309 directive evaluation.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.VERIFIED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+        else:
+            evidence.append(f"Before: AI crawler was permitted by robots.txt (rule: {before_rule or 'None'}).")
+            evidence.append(f"After: AI crawler REMAINS PERMITTED by robots.txt (rule: {after_rule or 'None'}).")
+            if score_delta != 0:
+                evidence.append(
+                    f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}), "
+                    f"BUT expected robots restriction is ABSENT. "
+                    f"Per security validation principle, score changes do not substitute for actual restriction enforcement."
+                )
+            else:
+                evidence.append("Expected robots.txt security restriction was not applied.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.FAILED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+
+    @classmethod
+    def _validate_security_rate_limit(
+        cls,
+        audit_before: Dict[str, Any],
+        audit_after: Dict[str, Any],
+        target: TargetIssue,
+        before_score: int,
+        after_score: int,
+        score_delta: int,
+        fix_status: str,
+        timestamp: str,
+    ) -> ValidationResult:
+        """
+        Validates Phase 3 Security Restriction: AI_RATE_LIMIT.
+        Objective: ACCESSIBLE -> INTENTIONALLY BLOCKED / RATE LIMITED (HTTP 429).
+        """
+        b_verdict, b_mech, b_status, b_blocked = cls._extract_detection_status(audit_before)
+        a_verdict, a_mech, a_status, a_blocked = cls._extract_detection_status(audit_after)
+
+        was_rate_limited = (b_status == 429) or ("RATE" in b_mech) or ("RATE" in b_verdict)
+        is_rate_limited = (a_status == 429) or ("RATE" in a_mech) or ("RATE" in a_verdict)
+
+        issue_before = {
+            "category": "AI_RATE_LIMIT",
+            "http_status": b_status,
+            "verdict": b_verdict,
+            "mechanism": b_mech,
+            "blocked": b_blocked,
+            "rate_limited": was_rate_limited,
+        }
+        issue_after = {
+            "category": "AI_RATE_LIMIT",
+            "http_status": a_status,
+            "verdict": a_verdict,
+            "mechanism": a_mech,
+            "blocked": a_blocked,
+            "rate_limited": is_rate_limited,
+        }
+
+        evidence: List[str] = []
+
+        # Check unchanged state
+        if b_verdict == a_verdict and b_mech == a_mech and b_status == a_status and before_score == after_score:
+            if not is_rate_limited and a_status == 200:
+                evidence.append("Result is completely UNCHANGED between baseline and post-enforcement audits.")
+                evidence.append(f"HTTP Status: {a_status}, Verdict: {a_verdict}. AI crawler remains unthrottled.")
+                evidence.append("Expected rate-limiting restriction was not applied.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+
+        # Baseline already rate limited
+        if was_rate_limited:
+            if is_rate_limited:
+                evidence.append(f"Baseline crawler was ALREADY rate-limited (HTTP {b_status}, {b_mech}).")
+                evidence.append(f"Post-enforcement observation: crawler remains rate-limited (HTTP {a_status}, {a_mech}).")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.VERIFIED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                    details={"already_restricted_in_baseline": True},
+                )
+
+        # Successful rate limiting
+        if is_rate_limited:
+            evidence.append(f"Before: AI crawler had normal access (HTTP {b_status}, {b_verdict}).")
+            evidence.append(f"After: AI crawler is now INTENTIONALLY RATE LIMITED (HTTP {a_status}, mechanism: {a_mech}).")
+            evidence.append(f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}).")
+            evidence.append("Rate-limiting security enforcement confirmed.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.VERIFIED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+
+        # Partial verification (e.g. 403 or blocked, but not explicitly 429)
+        if a_blocked or a_status in (403, 503):
+            evidence.append(f"Before: HTTP {b_status} {b_verdict}.")
+            evidence.append(f"After: HTTP {a_status} {a_verdict} via {a_mech}.")
+            evidence.append("Partially verified: crawler access was restricted/blocked, but HTTP 429 Rate Limit was not specifically returned.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.PARTIALLY_VERIFIED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+
+        # Failed: Still accessible
+        evidence.append(f"Before: AI crawler was accessible (HTTP {b_status}).")
+        evidence.append(f"After: AI crawler REMAINS accessible (HTTP {a_status}, {a_verdict}). Expected rate limiting (HTTP 429).")
+        if score_delta != 0:
+            evidence.append(
+                f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}), "
+                f"BUT rate limit restriction was NOT observed. Actual crawler state must prove restriction."
+            )
+        else:
+            evidence.append("Expected rate-limiting restriction did not occur.")
+        return ValidationResult(
+            before_score=before_score,
+            after_score=after_score,
+            score_delta=score_delta,
+            issue_before=issue_before,
+            issue_after=issue_after,
+            fix_status=fix_status,
+            validation_status=ValidationStatus.FAILED,
+            evidence=evidence,
+            timestamp=timestamp,
+        )
+
+    @classmethod
+    def _validate_security_waf_challenge(
+        cls,
+        audit_before: Dict[str, Any],
+        audit_after: Dict[str, Any],
+        target: TargetIssue,
+        before_score: int,
+        after_score: int,
+        score_delta: int,
+        fix_status: str,
+        timestamp: str,
+    ) -> ValidationResult:
+        """
+        Validates Phase 3 Security Restriction: AI_WAF_CHALLENGE.
+        Objective: ACCESSIBLE -> INTENTIONALLY CHALLENGED / BLOCKED by WAF.
+        """
+        b_verdict, b_mech, b_status, b_blocked = cls._extract_detection_status(audit_before)
+        a_verdict, a_mech, a_status, a_blocked = cls._extract_detection_status(audit_after)
+
+        was_waf_challenged = cls._has_waf_evidence(b_verdict, b_mech)
+        is_waf_challenged = cls._has_waf_evidence(a_verdict, a_mech)
+
+        issue_before = {
+            "category": "AI_WAF_CHALLENGE",
+            "verdict": b_verdict,
+            "mechanism": b_mech,
+            "http_status": b_status,
+            "blocked": b_blocked,
+        }
+        issue_after = {
+            "category": "AI_WAF_CHALLENGE",
+            "verdict": a_verdict,
+            "mechanism": a_mech,
+            "http_status": a_status,
+            "blocked": a_blocked,
+        }
+
+        evidence: List[str] = []
+
+        # Check unchanged state
+        if b_verdict == a_verdict and b_mech == a_mech and b_status == a_status and b_blocked == a_blocked and before_score == after_score:
+            if not is_waf_challenged and a_status == 200:
+                evidence.append("Result is completely UNCHANGED between baseline and post-enforcement audits.")
+                evidence.append(f"AI crawler remains accessible (HTTP {a_status}, {a_verdict}).")
+                evidence.append("Expected WAF challenge security restriction was not applied.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+
+        # Baseline already challenged
+        if was_waf_challenged:
+            if is_waf_challenged:
+                evidence.append(f"Baseline crawler was ALREADY challenged/blocked by WAF ({b_verdict} via {b_mech}, HTTP {b_status}).")
+                evidence.append(f"Post-enforcement observation: crawler remains challenged/blocked ({a_verdict} via {a_mech}, HTTP {a_status}).")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.VERIFIED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                    details={"already_restricted_in_baseline": True},
+                )
+
+        # Successfully challenged/blocked
+        if is_waf_challenged:
+            evidence.append(f"Before: AI crawler had unrestricted access (HTTP {b_status}, {b_verdict}).")
+            evidence.append(f"After: AI crawler is now INTENTIONALLY CHALLENGED/BLOCKED by WAF ({a_verdict} via {a_mech}, HTTP {a_status}).")
+            evidence.append(f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}).")
+            evidence.append("WAF challenge security policy confirmed enforced.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.VERIFIED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+
+        # Failed: Still accessible
+        evidence.append(f"Before: AI crawler was accessible (HTTP {b_status}).")
+        evidence.append(f"After: AI crawler REMAINS accessible (HTTP 200, {a_verdict}). Expected WAF challenge.")
+        if score_delta != 0:
+            evidence.append(
+                f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}), "
+                f"BUT WAF challenge was NOT triggered. Actual crawler state must prove restriction."
+            )
+        else:
+            evidence.append("Expected WAF challenge security restriction did not occur.")
+        return ValidationResult(
+            before_score=before_score,
+            after_score=after_score,
+            score_delta=score_delta,
+            issue_before=issue_before,
+            issue_after=issue_after,
+            fix_status=fix_status,
+            validation_status=ValidationStatus.FAILED,
+            evidence=evidence,
+            timestamp=timestamp,
+        )
+
+    @classmethod
+    def _validate_security_captcha(
+        cls,
+        audit_before: Dict[str, Any],
+        audit_after: Dict[str, Any],
+        target: TargetIssue,
+        before_score: int,
+        after_score: int,
+        score_delta: int,
+        fix_status: str,
+        timestamp: str,
+    ) -> ValidationResult:
+        """
+        Validates Phase 3 Security Restriction: AI_CAPTCHA.
+        Objective: ACCESSIBLE -> INTENTIONALLY CHALLENGED with CAPTCHA / Turnstile.
+        """
+        b_verdict, b_mech, b_status, b_blocked = cls._extract_detection_status(audit_before)
+        a_verdict, a_mech, a_status, a_blocked = cls._extract_detection_status(audit_after)
+
+        crawl_b = audit_before.get("target_persona") or audit_before.get("crawl", audit_before)
+        signals_b = cls._extract_detection_signals(crawl_b)
+        was_captcha = any("captcha" in s.lower() or "turnstile" in s.lower() or "hcaptcha" in s.lower() for s in signals_b) or ("CAPTCHA" in b_mech) or ("TURNSTILE" in b_mech) or ("HCAPTCHA" in b_mech)
+
+        crawl_a = audit_after.get("target_persona") or audit_after.get("crawl", audit_after)
+        signals_a = cls._extract_detection_signals(crawl_a)
+        is_captcha = any("captcha" in s.lower() or "turnstile" in s.lower() or "hcaptcha" in s.lower() for s in signals_a) or ("CAPTCHA" in a_mech) or ("TURNSTILE" in a_mech) or ("HCAPTCHA" in a_mech)
+
+        issue_before = {
+            "category": "AI_CAPTCHA",
+            "verdict": b_verdict,
+            "mechanism": b_mech,
+            "http_status": b_status,
+            "captcha_detected": was_captcha,
+        }
+        issue_after = {
+            "category": "AI_CAPTCHA",
+            "verdict": a_verdict,
+            "mechanism": a_mech,
+            "http_status": a_status,
+            "captcha_detected": is_captcha,
+        }
+
+        evidence: List[str] = []
+
+        # Check unchanged state
+        if b_verdict == a_verdict and b_mech == a_mech and b_status == a_status and was_captcha == is_captcha and before_score == after_score:
+            if not is_captcha and a_status == 200:
+                evidence.append("Result is completely UNCHANGED between baseline and post-enforcement audits.")
+                evidence.append(f"AI crawler accessed target without CAPTCHA challenge (HTTP {a_status}).")
+                evidence.append("Expected CAPTCHA security challenge was not presented.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+
+        # Baseline already had CAPTCHA
+        if was_captcha:
+            if is_captcha:
+                evidence.append(f"Baseline crawler was ALREADY presented with CAPTCHA ({b_mech}, {b_verdict}).")
+                evidence.append(f"Post-enforcement observation: CAPTCHA challenge remains active ({a_mech}, {a_verdict}).")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.VERIFIED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                    details={"already_restricted_in_baseline": True},
+                )
+
+        # Successfully presented with CAPTCHA
+        if is_captcha:
+            evidence.append(f"Before: AI crawler had direct access without CAPTCHA challenge (HTTP {b_status}, {b_verdict}).")
+            evidence.append(f"After: AI crawler is now INTENTIONALLY CHALLENGED with CAPTCHA ({a_mech}, verdict: {a_verdict}).")
+            evidence.append(f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}).")
+            evidence.append("CAPTCHA challenge security policy confirmed enforced.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.VERIFIED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+
+        # Partially verified (e.g. challenged by general WAF, but specific CAPTCHA signal was partial)
+        if a_verdict in ("CHALLENGED", "BLOCKED") or a_blocked:
+            evidence.append(f"Before: HTTP {b_status} {b_verdict}.")
+            evidence.append(f"After: Crawler was challenged/blocked ({a_verdict} via {a_mech}), but explicit CAPTCHA payload was partially verified.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.PARTIALLY_VERIFIED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+
+        # Failed: Still accessible
+        evidence.append(f"Before: AI crawler was accessible (HTTP {b_status}).")
+        evidence.append(f"After: AI crawler REMAINS accessible (HTTP 200, {a_verdict}). Expected CAPTCHA challenge.")
+        if score_delta != 0:
+            evidence.append(
+                f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}), "
+                f"BUT CAPTCHA challenge was NOT triggered. Actual crawler state must prove restriction."
+            )
+        else:
+            evidence.append("Expected CAPTCHA challenge did not occur.")
+        return ValidationResult(
+            before_score=before_score,
+            after_score=after_score,
+            score_delta=score_delta,
+            issue_before=issue_before,
+            issue_after=issue_after,
+            fix_status=fix_status,
+            validation_status=ValidationStatus.FAILED,
+            evidence=evidence,
+            timestamp=timestamp,
+        )
+
+    @classmethod
+    def _validate_security_authentication(
+        cls,
+        audit_before: Dict[str, Any],
+        audit_after: Dict[str, Any],
+        target: TargetIssue,
+        before_score: int,
+        after_score: int,
+        score_delta: int,
+        fix_status: str,
+        timestamp: str,
+    ) -> ValidationResult:
+        """
+        Validates Phase 3 Security Restriction: AI_AUTHENTICATION.
+        Objective: ACCESSIBLE -> INTENTIONALLY REQUIRES AUTHENTICATION (HTTP 401 / 403 / Auth challenge).
+        """
+        b_verdict, b_mech, b_status, b_blocked = cls._extract_detection_status(audit_before)
+        a_verdict, a_mech, a_status, a_blocked = cls._extract_detection_status(audit_after)
+
+        crawl_a = audit_after.get("target_persona") or audit_after.get("crawl", audit_after)
+        headers_a = crawl_a.get("http", {}).get("headers", {}) if isinstance(crawl_a, dict) else {}
+        auth_header_a = any("www-authenticate" in k.lower() or "authorization" in k.lower() for k in headers_a)
+
+        was_auth_required = (b_status in (401, 407))
+        is_auth_required = (a_status in (401, 407)) or auth_header_a or (a_status == 403 and "auth" in a_mech.lower())
+
+        issue_before = {
+            "category": "AI_AUTHENTICATION",
+            "http_status": b_status,
+            "verdict": b_verdict,
+            "auth_required": was_auth_required,
+        }
+        issue_after = {
+            "category": "AI_AUTHENTICATION",
+            "http_status": a_status,
+            "verdict": a_verdict,
+            "auth_required": is_auth_required,
+        }
+
+        evidence: List[str] = []
+
+        # Check unchanged state
+        if b_status == a_status and b_verdict == a_verdict and before_score == after_score:
+            if not is_auth_required and a_status == 200:
+                evidence.append("Result is completely UNCHANGED between baseline and post-enforcement audits.")
+                evidence.append(f"AI crawler accessed target without authentication (HTTP {a_status}).")
+                evidence.append("Expected authentication requirement was not enforced.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+
+        # Baseline already required authentication
+        if was_auth_required:
+            if is_auth_required:
+                evidence.append(f"Baseline crawler was ALREADY required to authenticate (HTTP {b_status}).")
+                evidence.append(f"Post-enforcement observation: authentication requirement remains active (HTTP {a_status}).")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.VERIFIED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                    details={"already_restricted_in_baseline": True},
+                )
+
+        # Successfully requires authentication
+        if is_auth_required:
+            evidence.append(f"Before: AI crawler had unauthenticated access (HTTP {b_status}, {b_verdict}).")
+            evidence.append(f"After: AI crawler access now INTENTIONALLY REQUIRES AUTHENTICATION (HTTP {a_status}).")
+            evidence.append(f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}).")
+            evidence.append("Authentication access control confirmed enforced.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.VERIFIED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+
+        # Partial verification (e.g. redirect towards login or 403)
+        if a_status in (301, 302, 307, 403):
+            evidence.append(f"Before: HTTP {b_status} {b_verdict}.")
+            evidence.append(f"After: HTTP {a_status} {a_verdict}. Access restricted, partially verified authentication challenge.")
+            return ValidationResult(
+                before_score=before_score,
+                after_score=after_score,
+                score_delta=score_delta,
+                issue_before=issue_before,
+                issue_after=issue_after,
+                fix_status=fix_status,
+                validation_status=ValidationStatus.PARTIALLY_VERIFIED,
+                evidence=evidence,
+                timestamp=timestamp,
+            )
+
+        # Failed: Still accessible
+        evidence.append(f"Before: AI crawler was unauthenticated (HTTP {b_status}).")
+        evidence.append(f"After: AI crawler continues receiving HTTP {a_status} without authentication requirement.")
+        if score_delta != 0:
+            evidence.append(
+                f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}), "
+                f"BUT authentication requirement was NOT enforced."
+            )
+        else:
+            evidence.append("Expected authentication requirement did not occur.")
+        return ValidationResult(
+            before_score=before_score,
+            after_score=after_score,
+            score_delta=score_delta,
+            issue_before=issue_before,
+            issue_after=issue_after,
+            fix_status=fix_status,
+            validation_status=ValidationStatus.FAILED,
+            evidence=evidence,
+            timestamp=timestamp,
+        )
+
+    # =========================================================================
     # Helpers & Normalizers
     # =========================================================================
+
+    @classmethod
+    def _is_controlled_target(cls, target_url: str) -> bool:
+        """Whether an in-process control action may safely target this URL."""
+        from urllib.parse import urlparse
+
+        host = (urlparse(target_url).hostname or "").lower()
+        return host in {"localhost", "127.0.0.1", "::1"}
+
+    @classmethod
+    def _has_waf_evidence(cls, verdict: str, mechanism: str) -> bool:
+        """Require a detector-recognized WAF/challenge mechanism, not HTTP 403 alone."""
+        mechanism = mechanism.upper()
+        waf_markers = ("WAF", "CLOUDFLARE", "DATADOME", "PERIMETERX", "AKAMAI", "CUSTOM_BOT_BLOCK")
+        return verdict in ("CHALLENGED", "BLOCKED") and any(marker in mechanism for marker in waf_markers)
+
+    @classmethod
+    def _extract_detection_signals(cls, crawl: Any) -> List[str]:
+        """Collect top-level and evidence-layer detector signals from CrawlResult."""
+        if not isinstance(crawl, dict):
+            return []
+        detection = crawl.get("detection", {})
+        if not isinstance(detection, dict):
+            return []
+        evidence = detection.get("evidence", {})
+        signals = list(detection.get("signals", []) or [])
+        if isinstance(evidence, dict):
+            for key in ("dom_signals", "matched_keywords", "matched_headers"):
+                signals.extend(evidence.get(key, []) or [])
+        return [str(signal) for signal in signals]
+
+    @classmethod
+    def _persona_observations(cls, audit: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """Extract named Phase 1 crawl observations from supported aggregate schemas."""
+        observations: Dict[str, Dict[str, Any]] = {}
+
+        def add(candidate: Any, fallback: Optional[str] = None) -> None:
+            if not isinstance(candidate, dict):
+                return
+            name = str(candidate.get("persona") or fallback or "").lower()
+            if name:
+                observations[name] = candidate
+
+        add(audit.get("target_persona"))
+        add(audit.get("baseline_browser"), "standard_browser")
+        add(audit.get("crawl"))
+        for key in ("raw_results", "results", "personas"):
+            value = audit.get(key)
+            if isinstance(value, list):
+                for candidate in value:
+                    add(candidate)
+            elif isinstance(value, dict):
+                for name, candidate in value.items():
+                    add(candidate, str(name))
+        # crawl_target() stores the underlying CrawlResult under bots.<name>.raw.
+        bots = audit.get("bots", {})
+        if isinstance(bots, dict):
+            for name, candidate in bots.items():
+                if isinstance(candidate, dict):
+                    add(candidate.get("raw"), str(name))
+        return observations
+
+    @classmethod
+    def _persona_is_accessible(cls, crawl: Dict[str, Any]) -> bool:
+        verdict, _, status, blocked = cls._extract_detection_status(crawl)
+        allowed, _ = cls._extract_robots_status(crawl)
+        return allowed and not blocked and verdict == "ACCESSIBLE" and 200 <= status < 300
+
+    @classmethod
+    def _persona_is_restricted(cls, crawl: Dict[str, Any]) -> bool:
+        """Whether a Phase 1 observation proves the persona was restricted."""
+        verdict, _, status, blocked = cls._extract_detection_status(crawl)
+        allowed, _ = cls._extract_robots_status(crawl)
+        return not allowed or blocked or verdict in ("RESTRICTED", "BLOCKED", "CHALLENGED") or status in (401, 429)
+
+    @classmethod
+    def _apply_target_persona_guard(
+        cls, result: ValidationResult, audit_after: Dict[str, Any], target: TargetIssue
+    ) -> ValidationResult:
+        """Require every explicitly targeted persona to be observed as restricted."""
+        if not target.target_personas or result.validation_status not in (
+            ValidationStatus.VERIFIED,
+            ValidationStatus.PARTIALLY_VERIFIED,
+        ):
+            return result
+
+        observations = cls._persona_observations(audit_after)
+        missing, still_accessible = [], []
+        for persona in target.target_personas:
+            crawl = observations.get(persona.lower())
+            if crawl is None:
+                missing.append(persona)
+            elif not cls._persona_is_restricted(crawl):
+                verdict, mechanism, status, _ = cls._extract_detection_status(crawl)
+                still_accessible.append(f"{persona} (HTTP {status}, {verdict} via {mechanism})")
+
+        if missing:
+            result.validation_status = ValidationStatus.INCONCLUSIVE
+            result.evidence.append(
+                "Target-persona restriction check is inconclusive: no post-control crawler observation for "
+                + ", ".join(missing) + "."
+            )
+        elif still_accessible:
+            result.validation_status = ValidationStatus.PARTIALLY_VERIFIED
+            result.evidence.append(
+                "Partial enforcement: explicitly targeted personas remain accessible: "
+                + ", ".join(still_accessible) + "."
+            )
+            result.details["unrestricted_target_personas"] = still_accessible
+        return result
+
+    @classmethod
+    def _apply_collateral_guard(
+        cls, result: ValidationResult, audit_after: Dict[str, Any], target: TargetIssue
+    ) -> ValidationResult:
+        """Downgrade a target success when declared allowed traffic was blocked or unobserved."""
+        if not target.allowed_personas or result.validation_status not in (
+            ValidationStatus.VERIFIED,
+            ValidationStatus.PARTIALLY_VERIFIED,
+        ):
+            return result
+
+        observations = cls._persona_observations(audit_after)
+        missing, impacted = [], []
+        for persona in target.allowed_personas:
+            crawl = observations.get(persona.lower())
+            if crawl is None:
+                missing.append(persona)
+            elif not cls._persona_is_accessible(crawl):
+                verdict, mechanism, status, _ = cls._extract_detection_status(crawl)
+                impacted.append(f"{persona} (HTTP {status}, {verdict} via {mechanism})")
+
+        if missing:
+            result.validation_status = ValidationStatus.INCONCLUSIVE
+            result.evidence.append(
+                "Allowed-traffic collateral check is inconclusive: no post-control crawler observation for "
+                + ", ".join(missing) + "."
+            )
+        if impacted:
+            result.validation_status = ValidationStatus.PARTIALLY_VERIFIED
+            result.evidence.append(
+                "Collateral impact detected: target restriction was observed, but explicitly allowed traffic was also restricted: "
+                + ", ".join(impacted) + "."
+            )
+            result.details["collateral_impacted_personas"] = impacted
+        return result
 
     @classmethod
     def _extract_score(cls, audit: Dict[str, Any]) -> int:
@@ -860,20 +1713,27 @@ class FixValidationEngine:
 
     @classmethod
     def _check_environment_unavailable(cls, audit: Dict[str, Any]) -> Tuple[bool, str]:
-        """Checks if the test environment was down or unreachable (MVP Case 6)."""
+        """Checks if the test environment was down, unreachable, or rejected connection (MVP Case 6)."""
         if not isinstance(audit, dict):
             return True, "Audit payload is not a valid dictionary"
 
         if audit.get("status") == "error":
             return True, audit.get("error") or "Audit reported error status"
 
+        if "error" in audit and audit["error"] and audit.get("status") != "success":
+            return True, str(audit["error"])
+
         crawl = audit.get("crawl", audit)
         if isinstance(crawl, dict):
             if crawl.get("success") is False:
                 return True, crawl.get("error") or "Crawler failed to complete execution"
+            if crawl.get("error"):
+                return True, str(crawl.get("error"))
             http_status = crawl.get("http", {}).get("status_code")
             if http_status in (502, 504):
-                return True, f"HTTP {http_status} Gateway/Proxy error (environment unavailable)"
+                return True, f"HTTP {http_status} Gateway/Proxy error (environment unavailable or target rejected connection)"
+            if http_status == 503 and crawl.get("success") is False:
+                return True, "HTTP 503 Service Unavailable (environment unavailable or target rejected connection)"
 
         return False, ""
 
@@ -905,27 +1765,80 @@ class FixValidationEngine:
             return target_issue
 
         if isinstance(target_issue, IssueCategory):
-            return TargetIssue(category=target_issue)
+            is_sec = target_issue in (
+                IssueCategory.AI_ROBOTS_RESTRICTION,
+                IssueCategory.AI_RATE_LIMIT,
+                IssueCategory.AI_WAF_CHALLENGE,
+                IssueCategory.AI_CAPTCHA,
+                IssueCategory.AI_AUTHENTICATION,
+            )
+            return TargetIssue(category=target_issue, is_security_restriction=is_sec)
 
         if isinstance(target_issue, str):
-            s = target_issue.upper()
-            is_restriction = "RESTRICT" in s or "AI_" in s
-            if "ROBOT" in s:
+            s = target_issue.upper().replace("-", "_").strip()
+            is_sec = "RESTRICT" in s or "SECURITY" in s or s.startswith("AI_") or "AI_" in s
+
+            # Phase 3 Security Restrictions (ACCESSIBLE -> INTENTIONALLY RESTRICTED)
+            if s == "AI_ROBOTS_RESTRICTION" or ("ROBOT" in s and is_sec):
+                return TargetIssue(
+                    category=IssueCategory.AI_ROBOTS_RESTRICTION,
+                    expected_resolved_state="RESTRICTED",
+                    description=target_issue,
+                    is_security_restriction=True,
+                )
+            elif s == "AI_RATE_LIMIT" or ("RATE" in s and is_sec) or ("429" in s and is_sec):
+                return TargetIssue(
+                    category=IssueCategory.AI_RATE_LIMIT,
+                    expected_resolved_state="BLOCKED",
+                    description=target_issue,
+                    is_security_restriction=True,
+                )
+            elif s == "AI_WAF_CHALLENGE" or ("WAF" in s and is_sec) or ("CLOUDFLARE" in s and is_sec) or ("CHALLENGE" in s and is_sec and "CAPTCHA" not in s):
+                return TargetIssue(
+                    category=IssueCategory.AI_WAF_CHALLENGE,
+                    expected_resolved_state="CHALLENGED",
+                    description=target_issue,
+                    is_security_restriction=True,
+                )
+            elif s == "AI_CAPTCHA" or ("CAPTCHA" in s and is_sec) or ("TURNSTILE" in s and is_sec):
+                return TargetIssue(
+                    category=IssueCategory.AI_CAPTCHA,
+                    expected_resolved_state="CHALLENGED",
+                    description=target_issue,
+                    is_security_restriction=True,
+                )
+            elif s == "AI_AUTHENTICATION" or ("AUTH" in s and is_sec):
+                return TargetIssue(
+                    category=IssueCategory.AI_AUTHENTICATION,
+                    expected_resolved_state="RESTRICTED",
+                    description=target_issue,
+                    is_security_restriction=True,
+                )
+            elif is_sec:
+                return TargetIssue(
+                    category=IssueCategory.AI_RESTRICTION,
+                    expected_resolved_state="RESTRICTED",
+                    description=target_issue,
+                    is_security_restriction=True,
+                )
+
+            # Phase 2 Optimization (RESTRICTED -> ACCESSIBLE)
+            elif "ROBOT" in s:
                 return TargetIssue(
                     category=IssueCategory.ROBOTS_TXT,
-                    expected_resolved_state="RESTRICTED" if is_restriction else "ALLOWED",
+                    expected_resolved_state="ALLOWED",
                     description=target_issue,
                 )
             elif "WAF" in s or "CLOUDFLARE" in s or ("CHALLENGE" in s and "CAPTCHA" not in s):
                 return TargetIssue(
                     category=IssueCategory.WAF_CHALLENGE,
-                    expected_resolved_state="CHALLENGED" if is_restriction else "ACCESSIBLE",
+                    expected_resolved_state="ACCESSIBLE",
                     description=target_issue,
                 )
             elif "CAPTCHA" in s or "TURNSTILE" in s:
                 return TargetIssue(
                     category=IssueCategory.CAPTCHA,
-                    expected_resolved_state="CHALLENGED" if is_restriction else "ACCESSIBLE",
+                    expected_resolved_state="ACCESSIBLE",
                     description=target_issue,
                 )
             elif "LATENCY" in s or "SPEED" in s or "PERF" in s:
@@ -933,37 +1846,63 @@ class FixValidationEngine:
             elif "429" in s or "RATE" in s:
                 return TargetIssue(
                     category=IssueCategory.RATE_LIMIT,
-                    expected_resolved_state="BLOCKED" if is_restriction else "200",
+                    expected_resolved_state="200",
                     description=target_issue,
                 )
             elif "5" in s and "STATUS" in s:
                 return TargetIssue(category=IssueCategory.SERVER_ERROR, description=target_issue)
-            if is_restriction:
-                return TargetIssue(
-                    category=IssueCategory.AI_RESTRICTION,
-                    expected_resolved_state="RESTRICTED",
-                    description=target_issue,
-                )
+
             return TargetIssue(category=IssueCategory.OTHER, description=target_issue)
 
         if isinstance(target_issue, dict):
-            cat_str = str(target_issue.get("category", target_issue.get("control_id", "OTHER"))).upper()
+            cat_str = str(target_issue.get("category", target_issue.get("control_id", "OTHER"))).upper().replace("-", "_").strip()
             cat = IssueCategory.OTHER
             for c in IssueCategory:
                 if c.value == cat_str:
                     cat = c
                     break
-            is_restr = "RESTRICT" in cat_str or "AI_" in cat_str or bool(target_issue.get("is_restriction"))
+
+            is_sec = (
+                bool(target_issue.get("is_security_restriction"))
+                or bool(target_issue.get("is_restriction"))
+                or cat in (
+                    IssueCategory.AI_ROBOTS_RESTRICTION,
+                    IssueCategory.AI_RATE_LIMIT,
+                    IssueCategory.AI_WAF_CHALLENGE,
+                    IssueCategory.AI_CAPTCHA,
+                    IssueCategory.AI_AUTHENTICATION,
+                    IssueCategory.AI_RESTRICTION,
+                )
+                or "RESTRICT" in cat_str
+                or "SECURITY" in cat_str
+                or cat_str.startswith("AI_")
+            )
+
             exp_state = target_issue.get("expected_resolved_state")
-            if not exp_state and is_restr:
-                if "ROBOT" in cat_str:
+            if not exp_state and is_sec:
+                if "ROBOT" in cat_str or cat == IssueCategory.AI_ROBOTS_RESTRICTION:
                     exp_state = "RESTRICTED"
-                elif "WAF" in cat_str or "CAPTCHA" in cat_str or "CHALLENGE" in cat_str:
+                elif "WAF" in cat_str or "CAPTCHA" in cat_str or "CHALLENGE" in cat_str or cat in (IssueCategory.AI_WAF_CHALLENGE, IssueCategory.AI_CAPTCHA):
                     exp_state = "CHALLENGED"
-                elif "RATE" in cat_str or "429" in cat_str:
+                elif "RATE" in cat_str or "429" in cat_str or cat == IssueCategory.AI_RATE_LIMIT:
                     exp_state = "BLOCKED"
                 else:
                     exp_state = "RESTRICTED"
+
+            if cat == IssueCategory.OTHER and is_sec:
+                if "ROBOT" in cat_str:
+                    cat = IssueCategory.AI_ROBOTS_RESTRICTION
+                elif "RATE" in cat_str or "429" in cat_str:
+                    cat = IssueCategory.AI_RATE_LIMIT
+                elif "WAF" in cat_str or ("CHALLENGE" in cat_str and "CAPTCHA" not in cat_str):
+                    cat = IssueCategory.AI_WAF_CHALLENGE
+                elif "CAPTCHA" in cat_str or "TURNSTILE" in cat_str:
+                    cat = IssueCategory.AI_CAPTCHA
+                elif "AUTH" in cat_str:
+                    cat = IssueCategory.AI_AUTHENTICATION
+                else:
+                    cat = IssueCategory.AI_RESTRICTION
+
             return TargetIssue(
                 category=cat,
                 persona=target_issue.get("persona"),
@@ -971,6 +1910,9 @@ class FixValidationEngine:
                 expected_resolved_state=exp_state,
                 description=target_issue.get("description") or target_issue.get("control_id"),
                 threshold=target_issue.get("threshold"),
+                is_security_restriction=bool(is_sec),
+                target_personas=target_issue.get("target_personas") or [],
+                allowed_personas=target_issue.get("allowed_personas") or [],
             )
 
         # Auto-infer from audit_before
