@@ -7,6 +7,10 @@ from typing import List, Dict, Any, Optional
 import streamlit as st
 import pandas as pd
 
+def render_html(html_str: str) -> None:
+    """Render HTML cleanly without Markdown interpreting indented lines as code blocks."""
+    st.markdown(textwrap.dedent(html_str).strip(), unsafe_allow_html=True)
+
 from crawler import list_personas
 from demo_streaming_site.app import start_server
 from fix_engine import (
@@ -472,7 +476,7 @@ st.markdown("""
     /* How It Works Grid */
     .how-it-works-grid {
         display: grid;
-        grid-template-columns: repeat(4, 1fr);
+        grid-template-columns: repeat(2, 1fr);
         gap: 1.2rem;
         margin-top: 1rem;
         margin-bottom: 2.5rem;
@@ -728,23 +732,23 @@ ai_persona_keys = [p["id"] for p in ai_personas]
 col_p1, col_p2, col_p3, col_space = st.columns([1.5, 1.5, 1.5, 3.5])
 default_target = "https://example.com"
 with col_p1:
-    if st.button("🌐 https://example.com", use_container_width=True):
+    if st.button("🌐 https://example.com", width="stretch"):
         st.session_state["target_input"] = "https://example.com"
 with col_p2:
-    if st.button("📚 https://wikipedia.org", use_container_width=True):
+    if st.button("📚 https://wikipedia.org", width="stretch"):
         st.session_state["target_input"] = "https://wikipedia.org"
 with col_p3:
-    if st.button("🧪 Sandbox (Port 5050)", use_container_width=True):
+    if st.button("🧪 Sandbox (Port 5050)", width="stretch"):
         st.session_state["target_input"] = "http://127.0.0.1:5050"
 
 current_url_val = st.session_state.get("target_input", default_target)
 
 with st.form("audit_config_form"):
-    st.markdown("""
+    render_html("""
     <div id="audit-config" class="config-header">
         ⚙️ Audit Configuration & Persona Emulation
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     security_mode = st.radio(
         "AI WORKFLOW MODE:",
@@ -809,7 +813,7 @@ with st.form("audit_config_form"):
     submit_button = st.form_submit_button(
         "⚡ Run AI Accessibility Audit" if "ACCESSIBILITY" in security_mode else "🛡️ Run AI Restriction Audit",
         type="primary",
-        use_container_width=True
+        width="stretch"
     )
 
 # -----------------------------------------------------------------------------
@@ -831,13 +835,8 @@ for _p in ai_personas:
     )
 chips_markup = "".join(_chip_parts)
 
-st.markdown(
-    f'<div style="font-size: 0.85rem; font-weight: 700; text-transform: uppercase;'
-    f' letter-spacing: 0.08em; color: var(--text-secondary); margin-top: 1.5rem;'
-    f' margin-bottom: 0.5rem;">🤖 Supported AI Crawlers ({len(ai_personas)})</div>'
-    f'<div class="crawler-grid">{chips_markup}</div>',
-    unsafe_allow_html=True,
-)
+with st.expander(f"🤖 Supported AI Crawlers ({len(ai_personas)})", expanded=False):
+    render_html(f'<div class="crawler-grid">{chips_markup}</div>')
 
 # -----------------------------------------------------------------------------
 # HELPER FUNCTIONS
@@ -1109,15 +1108,15 @@ if submit_button:
 
         progress_slot = st.empty()
         with progress_slot.container():
-            st.markdown("""
+            render_html("""
             <div style="background: #0d1527; border: 1px solid rgba(99,102,241,0.3); border-radius: 14px; padding: 1.4rem; margin-bottom: 1.5rem;">
-                <div style="font-weight: 700; font-size: 1rem; color: #ffffff; margin-bottom: 0.8rem; display: flex; align-items: center; gap: 0.5rem;">
+                <div style="font-weight: 700; font-size: 1rem; color: #ffffff; display: flex; align-items: center; gap: 0.5rem;">
                     <span class="status-dot"></span> Executing Multi-Stage AI Crawler Audit...
                 </div>
-            """, unsafe_allow_html=True)
+            </div>
+            """)
             prog_bar = st.progress(0)
             status_text = st.empty()
-            st.markdown("</div>", unsafe_allow_html=True)
 
         try:
             status_text.markdown("**Step**: `1. Initializing audit parameters and verifying target connectivity...`")
@@ -1159,11 +1158,16 @@ if submit_button:
             # BUILD AGGREGATE SCORING from ALL persona results (not just primary_res)
             # ----------------------------------------------------------------
             aggregate_payload = _build_aggregate_payload(results)
-            aggregate_scoring = calculate_score(aggregate_payload)
+            is_restriction_audit = "RESTRICTION" in st.session_state.get("audit_security_mode", security_mode)
+            aggregate_scoring = calculate_score(
+                aggregate_payload,
+                mode="RESTRICTION" if is_restriction_audit else "ACCESSIBILITY"
+            )
 
             st.session_state["audit_results"] = results
             st.session_state["audit_url"] = norm_url
             st.session_state["aggregate_scoring"] = aggregate_scoring
+            st.session_state["scroll_to_score"] = True
         except Exception as e:
             st.error(f"Audit execution error: {str(e)}")
             st.stop()
@@ -1178,10 +1182,16 @@ if "audit_results" in st.session_state:
     baseline_result = primary_res.get("baseline")
 
     # Aggregate scoring: computed over ALL personas (not just primary_res)
+    active_security_mode = st.session_state.get("audit_security_mode", "AI ACCESSIBILITY")
+    is_restr_mode = "RESTRICTION" in active_security_mode
+
     aggregate_scoring = st.session_state.get("aggregate_scoring", {})
     if not aggregate_scoring:
         # Fallback: build aggregate now (e.g. page reload)
-        aggregate_scoring = calculate_score(_build_aggregate_payload(results))
+        aggregate_scoring = calculate_score(
+            _build_aggregate_payload(results),
+            mode="RESTRICTION" if is_restr_mode else "ACCESSIBILITY"
+        )
 
     score = aggregate_scoring.get("score", 0)
     grade = aggregate_scoring.get("grade", "N/A")
@@ -1227,13 +1237,33 @@ if "audit_results" in st.session_state:
     total_issues = len(penalties)
 
     st.markdown("<div id=\"results-section\"></div>", unsafe_allow_html=True)
+    st.markdown("<div id=\"overall-accessibility-score\"></div>", unsafe_allow_html=True)
+
+    # Auto-scroll directly to Overall Accessibility Score after running audit
+    if st.session_state.pop("scroll_to_score", False):
+        st.html(
+            """
+            <script>
+                setTimeout(function() {
+                    var el = document.getElementById('overall-accessibility-score') ||
+                             (window.parent && window.parent.document && window.parent.document.getElementById('overall-accessibility-score')) ||
+                             document.getElementById('results-section');
+                    if (el) {
+                        el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    }
+                }, 250);
+            </script>
+            """
+        )
+
+    score_title = "OVERALL AI RESTRICTION & SECURITY SCORE" if is_restr_mode else "OVERALL AI ACCESSIBILITY SCORE"
 
     # 1. Overall Score Banner
-    st.markdown(f"""
-    <div class="score-banner">
+    render_html(f"""
+    <div class="score-banner" id="overall-score-banner">
         <div>
             <div style="font-size: 0.8rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.12em; color: #818cf8; margin-bottom: 0.4rem;">
-                OVERALL AI ACCESSIBILITY SCORE
+                {score_title}
             </div>
             <div class="score-circle-group">
                 <span class="score-big-num">{score}</span>
@@ -1251,10 +1281,10 @@ if "audit_results" in st.session_state:
             </div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     # 2. KPI Summary Row (5 distinct categories)
-    st.markdown(f"""
+    render_html(f"""
     <div class="kpi-row" style="display: grid; grid-template-columns: repeat(5, 1fr); gap: 0.9rem;">
         <div class="kpi-card kpi-card-acc">
             <div class="kpi-label">Accessible Crawlers</div>
@@ -1282,7 +1312,7 @@ if "audit_results" in st.session_state:
             <div class="kpi-subtext">Deduction signals flagged</div>
         </div>
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     # -------------------------------------------------------------------------
     # POINT DEDUCTION TRACKER — sourced from aggregate_scoring (ALL personas)
@@ -1292,77 +1322,77 @@ if "audit_results" in st.session_state:
     base_score = aggregate_scoring.get("base_score", 100)
     final_score_from_engine = aggregate_scoring.get("score", score)
 
-    st.markdown("""
-    <div style="font-size: 1.1rem; font-weight: 800; letter-spacing: -0.02em; color: #ffffff; margin-top: 1.8rem; margin-bottom: 0.6rem;">
-        📉 Point Deduction Tracker
-    </div>
-    """, unsafe_allow_html=True)
+    tracker_label = (
+        f"📉 Point Deduction Tracker (-{total_deductions} pts)"
+        if total_deductions > 0
+        else "📉 Point Deduction Tracker (0 deductions)"
+    )
+    with st.expander(tracker_label, expanded=False):
+        if not tracker_penalties:
+            render_html("""
+            <div style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.3); border-radius: 12px; padding: 1.2rem 1.4rem; color: #a7f3d0;">
+                <strong>✅ No scoring deductions detected.</strong><br>
+                Starting score of 100 was fully preserved.
+            </div>
+            """)
+        else:
+            severity_colors = {
+                "CRITICAL": ("#ef4444", "rgba(239,68,68,0.1)", "rgba(239,68,68,0.3)"),
+                "HIGH":     ("#f59e0b", "rgba(245,158,11,0.1)", "rgba(245,158,11,0.3)"),
+                "MEDIUM":   ("#818cf8", "rgba(99,102,241,0.1)", "rgba(99,102,241,0.3)"),
+                "LOW":      ("#64748b", "rgba(100,116,139,0.1)", "rgba(100,116,139,0.3)"),
+            }
+            rows_html = ""
+            for p in tracker_penalties:
+                sev = p.get("severity", "LOW")
+                clr, bg, border = severity_colors.get(sev, severity_colors["LOW"])
+                cat = p.get("category", "")
+                reason = p.get("reason") or p.get("factor", "")
+                pts = p.get("points_deducted") or abs(p.get("penalty", 0))
+                evidence_items = p.get("evidence", [])
+                evidence_html = ""
+                if evidence_items:
+                    ev_items_str = "".join(
+                        f'<span style="font-size:0.73rem;color:#64748b;background:rgba(255,255,255,0.04);'
+                        f'border:1px solid rgba(255,255,255,0.07);border-radius:5px;padding:0.1rem 0.4rem;'
+                        f'margin-right:0.3rem;display:inline-block;margin-top:0.25rem;">{e}</span>'
+                        for e in evidence_items[:3]
+                    )
+                    evidence_html = f'<div style="margin-top:0.3rem;">{ev_items_str}</div>'
+                rows_html += f"""
+                <div style="display: flex; align-items: flex-start; justify-content: space-between;
+                            background: {bg}; border: 1px solid {border};
+                            border-radius: 10px; padding: 0.8rem 1.1rem; margin-bottom: 0.55rem;">
+                    <div style="flex:1;">
+                        <div style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
+                                    letter-spacing: 0.08em; color: {clr}; margin-bottom: 0.25rem;">{sev} &bull; {cat}</div>
+                        <div style="font-size: 0.9rem; color: #e2e8f0;">{reason}</div>
+                        {evidence_html}
+                    </div>
+                    <div style="font-size: 1.4rem; font-weight: 800; color: {clr}; white-space: nowrap; margin-left: 1.5rem;">-{pts}</div>
+                </div>"""
 
-    if not tracker_penalties:
-        st.markdown("""
-        <div style="background: rgba(16,185,129,0.08); border: 1px solid rgba(16,185,129,0.3); border-radius: 12px; padding: 1.2rem 1.4rem; color: #a7f3d0;">
-            <strong>✅ No scoring deductions detected.</strong><br>
-            Starting score of 100 was fully preserved. This site is AI-crawler optimized.
-        </div>
-        """, unsafe_allow_html=True)
-    else:
-        severity_colors = {
-            "CRITICAL": ("#ef4444", "rgba(239,68,68,0.1)", "rgba(239,68,68,0.3)"),
-            "HIGH":     ("#f59e0b", "rgba(245,158,11,0.1)", "rgba(245,158,11,0.3)"),
-            "MEDIUM":   ("#818cf8", "rgba(99,102,241,0.1)", "rgba(99,102,241,0.3)"),
-            "LOW":      ("#64748b", "rgba(100,116,139,0.1)", "rgba(100,116,139,0.3)"),
-        }
-        rows_html = ""
-        for p in tracker_penalties:
-            sev = p.get("severity", "LOW")
-            clr, bg, border = severity_colors.get(sev, severity_colors["LOW"])
-            cat = p.get("category", "")
-            reason = p.get("reason") or p.get("factor", "")
-            pts = p.get("points_deducted") or abs(p.get("penalty", 0))
-            evidence_items = p.get("evidence", [])
-            evidence_html = ""
-            if evidence_items:
-                ev_items_str = "".join(
-                    f'<span style="font-size:0.73rem;color:#64748b;background:rgba(255,255,255,0.04);'
-                    f'border:1px solid rgba(255,255,255,0.07);border-radius:5px;padding:0.1rem 0.4rem;'
-                    f'margin-right:0.3rem;display:inline-block;margin-top:0.25rem;">{e}</span>'
-                    for e in evidence_items[:3]
-                )
-                evidence_html = f'<div style="margin-top:0.3rem;">{ev_items_str}</div>'
-            rows_html += f"""
-            <div style="display: flex; align-items: flex-start; justify-content: space-between;
-                        background: {bg}; border: 1px solid {border};
-                        border-radius: 10px; padding: 0.8rem 1.1rem; margin-bottom: 0.55rem;">
-                <div style="flex:1;">
-                    <div style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
-                                letter-spacing: 0.08em; color: {clr}; margin-bottom: 0.25rem;">{sev} &bull; {cat}</div>
-                    <div style="font-size: 0.9rem; color: #e2e8f0;">{reason}</div>
-                    {evidence_html}
+            rows_html = textwrap.dedent(rows_html).strip()
+            render_html(f"""
+            <div style="background: #0d1527; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 1.2rem 1.3rem;">
+                <div style="display: flex; justify-content: space-between; align-items: center;
+                            margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.06);">
+                    <span style="font-size: 0.9rem; color: #94a3b8;">Starting Score</span>
+                    <span style="font-size: 1.4rem; font-weight: 800; color: #ffffff;">{base_score}</span>
                 </div>
-                <div style="font-size: 1.4rem; font-weight: 800; color: {clr}; white-space: nowrap; margin-left: 1.5rem;">-{pts}</div>
-            </div>"""
-
-        rows_html = textwrap.dedent(rows_html).strip()
-        st.markdown(f"""
-        <div style="background: #0d1527; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 1.2rem 1.3rem;">
-            <div style="display: flex; justify-content: space-between; align-items: center;
-                        margin-bottom: 1rem; padding-bottom: 0.75rem; border-bottom: 1px solid rgba(255,255,255,0.06);">
-                <span style="font-size: 0.9rem; color: #94a3b8;">Starting Score</span>
-                <span style="font-size: 1.4rem; font-weight: 800; color: #ffffff;">{base_score}</span>
+                {rows_html}
+                <div style="display: flex; justify-content: space-between; align-items: center;
+                            margin-top: 0.9rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.1);">
+                    <span style="font-size: 0.9rem; font-weight: 700; color: #94a3b8;">TOTAL DEDUCTED</span>
+                    <span style="font-size: 1.4rem; font-weight: 800; color: #ef4444;">-{total_deductions}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; align-items: center;
+                            margin-top: 0.5rem; padding-top: 0.6rem; border-top: 2px solid rgba(255,255,255,0.15);">
+                    <span style="font-size: 1rem; font-weight: 800; color: #ffffff; letter-spacing: -0.01em;">FINAL SCORE</span>
+                    <span style="font-size: 1.8rem; font-weight: 900; color: {'#10b981' if final_score_from_engine >= 75 else '#f59e0b' if final_score_from_engine >= 50 else '#ef4444'}">{final_score_from_engine} <span style="font-size: 1rem; font-weight: 600; color: #64748b;">/ 100</span></span>
+                </div>
             </div>
-            {rows_html}
-            <div style="display: flex; justify-content: space-between; align-items: center;
-                        margin-top: 0.9rem; padding-top: 0.75rem; border-top: 1px solid rgba(255,255,255,0.1);">
-                <span style="font-size: 0.9rem; font-weight: 700; color: #94a3b8;">TOTAL DEDUCTED</span>
-                <span style="font-size: 1.4rem; font-weight: 800; color: #ef4444;">-{total_deductions}</span>
-            </div>
-            <div style="display: flex; justify-content: space-between; align-items: center;
-                        margin-top: 0.5rem; padding-top: 0.6rem; border-top: 2px solid rgba(255,255,255,0.15);">
-                <span style="font-size: 1rem; font-weight: 800; color: #ffffff; letter-spacing: -0.01em;">FINAL SCORE</span>
-                <span style="font-size: 1.8rem; font-weight: 900; color: {'#10b981' if final_score_from_engine >= 75 else '#f59e0b' if final_score_from_engine >= 50 else '#ef4444'}">{final_score_from_engine} <span style="font-size: 1rem; font-weight: 600; color: #64748b;">/ 100</span></span>
-            </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """)
 
     # Baseline Differential Callout (Evidence-Grounded Selective Blocking Banner)
     if baseline_result:
@@ -1387,30 +1417,30 @@ if "audit_results" in st.session_state:
             has_403 = any(r.get("http", {}).get("status_code") == 403 for r in ai_challenged_or_blocked)
             status_details = " (HTTP 403 Forbidden)" if has_403 else ""
 
-            st.markdown(f"""
+            render_html(f"""
             <div style="background: rgba(239, 68, 68, 0.1); border: 1px solid rgba(239, 68, 68, 0.35); border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.75rem;">
                 <span style="font-size: 1.4rem;">⚠️</span>
                 <div style="font-size: 0.9rem; color: #fca5a5;">
                     <strong>Selective AI Crawler Blocking or Challenges Detected:</strong> Standard desktop browsers receive <code>200 OK</code>, but AI crawler personas encounter access barriers{status_details}{mech_details}.
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
         elif base_is_accessible and not ai_challenged_or_blocked:
-            st.markdown("""
+            render_html("""
             <div style="background: rgba(16, 185, 129, 0.1); border: 1px solid rgba(16, 185, 129, 0.35); border-radius: 12px; padding: 1rem 1.25rem; margin-bottom: 1.5rem; display: flex; align-items: center; gap: 0.75rem;">
                 <span style="font-size: 1.4rem;">✅</span>
                 <div style="font-size: 0.9rem; color: #a7f3d0;">
                     <strong>Consistent Access:</strong> Both AI assistant personas and human desktop browsers have unimpeded access.
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
     # 3. Crawler Results Table / Matrix
-    st.markdown("""
+    render_html("""
     <div style="font-size: 1.1rem; font-weight: 800; letter-spacing: -0.02em; color: #ffffff; margin-bottom: 0.6rem;">
         🤖 AI Crawler Results Matrix
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     matrix_rows = []
     matrix_list = list(results)
@@ -1456,14 +1486,14 @@ if "audit_results" in st.session_state:
         })
 
     df_matrix = pd.DataFrame(matrix_rows)
-    st.dataframe(df_matrix, use_container_width=True, hide_index=True)
+    st.dataframe(df_matrix, width="stretch", hide_index=True)
 
     # 4. Crawler Deep Dive / Detail View
-    st.markdown("""
+    render_html("""
     <div style="font-size: 1.1rem; font-weight: 800; letter-spacing: -0.02em; color: #ffffff; margin-top: 1.8rem; margin-bottom: 0.6rem;">
         🔍 Detailed Crawler Telemetry & Evidence Inspector
     </div>
-    """, unsafe_allow_html=True)
+    """)
 
     inspect_options = [r.get("persona") for r in results]
     inspect_persona_id = st.selectbox(
@@ -1495,13 +1525,13 @@ if "audit_results" in st.session_state:
             st.metric("Confidence Score", f"{int(conf_val * 100)}%" if isinstance(conf_val, (int, float)) else "N/A")
 
         if ins_verdict == "INCONCLUSIVE":
-            st.markdown(f"""
+            render_html(f"""
             <div style="background: rgba(245, 158, 11, 0.12); border: 1px solid rgba(245, 158, 11, 0.4); border-radius: 12px; padding: 1.2rem; color: #fbbf24; margin-top: 1rem;">
                 <strong>⚠️ Uncertainty Preserved (Zero-Hallucination Policy):</strong><br>
                 The crawler received HTTP {ins_http.get("status_code", "N/A")}, but detected no definitive WAF fingerprint, Cloudflare challenge, or bot-blocking signatures.
                 In compliance with strict evidence rules, this finding is classified as <strong>INCONCLUSIVE</strong>. The system will NOT fabricate an AI-specific blocking claim without concrete evidence.
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
         st.markdown("#### Observed Detection Signals")
         signals = ins_det.get("signals", [])
@@ -1519,7 +1549,7 @@ if "audit_results" in st.session_state:
             http_status = ins_http.get("status_code", "N/A")
             http_latency = ins_http.get("response_time_ms", "N/A")
             http_url = ins_http.get("final_url") or inspected_res.get("url", "N/A")
-            st.markdown(f"""
+            render_html(f"""
             <div style="background:#0d1424; border:1px solid rgba(255,255,255,0.07); border-radius:10px; padding:1rem;">
                 <div style="margin-bottom:0.5rem;"><span style="color:#64748b; font-size:0.8rem;">Status Code</span><br>
                     <strong style="font-size:1.1rem; color:#f8fafc;">{http_status}</strong></div>
@@ -1528,7 +1558,7 @@ if "audit_results" in st.session_state:
                 <div style="word-break:break-all;"><span style="color:#64748b; font-size:0.8rem;">Final URL</span><br>
                     <span style="color:#94a3b8; font-size:0.82rem;">{http_url}</span></div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
         with col_e2:
             st.markdown("**Robots.txt & Page Detection**")
             robots_exists = ins_robots.get("exists", False)
@@ -1537,7 +1567,7 @@ if "audit_results" in st.session_state:
             has_captcha_el = ins_page.get("has_captcha", False)
             has_waf_el = ins_page.get("has_waf_challenge", False)
             robots_icon = "✅" if robots_allowed else "🚫"
-            st.markdown(f"""
+            render_html(f"""
             <div style="background:#0d1424; border:1px solid rgba(255,255,255,0.07); border-radius:10px; padding:1rem;">
                 <div style="margin-bottom:0.5rem;"><span style="color:#64748b; font-size:0.8rem;">robots.txt exists</span><br>
                     <strong style="color:#f8fafc;">{'Yes' if robots_exists else 'No'}</strong></div>
@@ -1552,7 +1582,7 @@ if "audit_results" in st.session_state:
                         <strong style="color:{'#ef4444' if has_waf_el else '#10b981'};">{'Detected' if has_waf_el else 'None'}</strong></div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
     with tab_rem:
         rem_data = inspected_res.get("remediation", {})
@@ -1571,7 +1601,7 @@ if "audit_results" in st.session_state:
         evidence_list = rem_data.get("evidence_observed") or []
         validation_steps = rem_data.get("validation_steps") or []
 
-        st.markdown(f"""
+        render_html(f"""
         <div class="remediation-card">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 1rem;">
                 <span style="font-size: 1.15rem; font-weight: 800; color: #ffffff;">Remediation & Action Plan</span>
@@ -1584,7 +1614,7 @@ if "audit_results" in st.session_state:
             <div class="rem-section-title">Recommended Fix</div>
             <div class="rem-text">{fix_text}</div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
 
         if evidence_list:
             st.markdown("##### Grounded Evidence Observed:")
@@ -1596,7 +1626,7 @@ if "audit_results" in st.session_state:
             action_title = rem_data.get("action_title") or "Recommended Configuration Change"
             # Expected impact from code comment / recommendation
             impact_text_short = rem_data.get("expected_impact") or impact_text
-            st.markdown(f"""
+            render_html(f"""
             <div style="background: rgba(99,102,241,0.07); border: 1px solid rgba(99,102,241,0.25);
                         border-radius: 12px; padding: 1.1rem 1.3rem; margin-top: 0.8rem;">
                 <div style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase;
@@ -1607,7 +1637,7 @@ if "audit_results" in st.session_state:
                     Expected impact: {impact_text_short}
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
         if validation_steps:
             st.markdown("##### Verification & Validation Steps:")
@@ -1631,7 +1661,7 @@ if "audit_results" in st.session_state:
         env_url = env.base_url if env else "http://127.0.0.1:5050"
         env_id = env.id if env else "demo_streaming_site"
 
-        st.markdown(f"""
+        render_html(f"""
         <div class="phase3-container">
             <div class="phase3-header">
                 <div>
@@ -1650,7 +1680,7 @@ if "audit_results" in st.session_state:
                 Evaluate exposure across leading AI agents, enforce security controls, and verify enforcement using the canonical validation engine.
             </div>
         </div>
-        """, unsafe_allow_html=True)
+        """)
 
         # 1. Educational Context: Why restrict AI crawling?
         with st.expander("ℹ️ Understanding AI Crawl Restriction: Why, When, and How", expanded=False):
@@ -1688,7 +1718,7 @@ if "audit_results" in st.session_state:
                 "HTTP Code": http_code,
                 "Verdict": verdict,
             })
-        st.dataframe(pd.DataFrame(exposure_rows), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(exposure_rows), width="stretch", hide_index=True)
 
         # 3. External Site Safety Guarantee
         if not controlled:
@@ -1816,7 +1846,7 @@ def verify_ai_agent_token(request):
             apply_restr_btn = st.button(
                 "⚡ Apply Restriction & Validate",
                 type="primary",
-                use_container_width=True,
+                width="stretch",
                 disabled=not target_personas,
                 help="Enforces restriction on CineStream, executes live re-crawl, and runs canonical ValidationEngine."
             )
@@ -1824,7 +1854,7 @@ def verify_ai_agent_token(request):
             remove_restr_btn = st.button(
                 "🔄 Remove Restriction & Revert",
                 type="secondary",
-                use_container_width=True,
+                width="stretch",
                 disabled=not target_personas,
                 help="Removes active restriction and validates that CineStream returns to normal accessible state."
             )
@@ -1953,7 +1983,7 @@ def verify_ai_agent_token(request):
                 banner_title = "RESTRICTION VALIDATION FAILED"
                 banner_desc = "Target AI crawler remained accessible despite applied restriction."
 
-            st.markdown(f"""
+            render_html(f"""
             <div style="margin-top: 1.5rem;">
                 <div class="{banner_class}">
                     <span style="font-size: 1.8rem; font-weight: 900;">{banner_icon}</span>
@@ -1963,7 +1993,7 @@ def verify_ai_agent_token(request):
                     </div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
             p_primary = t_personas[0]
             before_raw_p = next((x for x in a_before.get("raw_results", []) if x.get("persona") == p_primary), a_before)
@@ -1972,7 +2002,7 @@ def verify_ai_agent_token(request):
             b_verd = before_raw_p.get("detection", {}).get("inference", {}).get("verdict", "ACCESSIBLE")
             a_verd = after_raw_p.get("detection", {}).get("inference", {}).get("verdict", "RESTRICTED")
 
-            st.markdown(f"""
+            render_html(f"""
             <div class="phase2-grid" style="margin-top: 1.2rem;">
                 <div class="state-card">
                     <div class="state-card-header state-before-title">
@@ -2003,7 +2033,7 @@ def verify_ai_agent_token(request):
                     </div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
             st.markdown("##### 👥 Multi-Persona Telemetry Verification")
             telemetry_rows = []
@@ -2029,7 +2059,7 @@ def verify_ai_agent_token(request):
                     "Observed Verdict": p_verd,
                     "Validation Outcome": outcome,
                 })
-            st.dataframe(pd.DataFrame(telemetry_rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(telemetry_rows), width="stretch", hide_index=True)
 
             col_r1, col_r2 = st.columns([1, 1])
             with col_r1:
@@ -2120,7 +2150,7 @@ def verify_ai_agent_token(request):
                 recommended_fix_desc = rem_info.get("recommended_fix", "Apply recommended configuration fix")
                 chosen_fix_id = "robots_txt"
 
-            st.markdown(f"""
+            render_html(f"""
             <div class="phase2-container">
                 <div class="phase2-header">
                     <div>
@@ -2153,7 +2183,7 @@ def verify_ai_agent_token(request):
                     </div>
                 </div>
             </div>
-            """, unsafe_allow_html=True)
+            """)
 
             restricted_bot_ids = []
             for r in results:
@@ -2194,7 +2224,7 @@ def verify_ai_agent_token(request):
                 run_fix_val = st.button(
                     "⚡ Apply Fix & Validate",
                     type="primary",
-                    use_container_width=True,
+                    width="stretch",
                     disabled=not selected_bots,
                     help="Executes backend Fix Application Engine on controlled test environment and validates via Re-crawl."
                 )
@@ -2290,7 +2320,7 @@ def verify_ai_agent_token(request):
                     banner_icon = "✗"
                     banner_title = "FIX VALIDATION FAILED"
 
-                st.markdown(f"""
+                render_html(f"""
                 <div style="margin-top: 1.5rem;">
                     <div class="{banner_class}">
                         <span style="font-size: 1.8rem; font-weight: 900;">{banner_icon}</span>
@@ -2302,14 +2332,14 @@ def verify_ai_agent_token(request):
                         </div>
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
+                """)
 
                 before_status_str = "RESTRICTED" if not a_before.get("robots_txt", {}).get("is_allowed", True) else "ACCESSIBLE"
                 after_status_str = "ACCESSIBLE" if a_after.get("robots_txt", {}).get("is_allowed", True) else "RESTRICTED"
 
                 persona_name = primary_res.get("persona", "GPTBot").title()
 
-                st.markdown(f"""
+                render_html(f"""
                 <div class="phase2-grid">
                     <div class="state-card">
                         <div class="state-card-header state-before-title">
@@ -2340,7 +2370,7 @@ def verify_ai_agent_token(request):
                         </div>
                     </div>
                 </div>
-                """, unsafe_allow_html=True)
+                """)
 
                 col_e1, col_e2 = st.columns([1, 1])
                 with col_e1:
@@ -2360,73 +2390,3 @@ def verify_ai_agent_token(request):
                             st.markdown(f"- `{ev}`")
                     else:
                         st.markdown("- `Score improved and target access barriers verified resolved.`")
-
-# -----------------------------------------------------------------------------
-# EXPLAINABILITY & TRUST SECTION ("Evidence-Based, Not Guesswork")
-# -----------------------------------------------------------------------------
-_pipeline_nodes = [
-    ("1. Target Website",        "Public URL / App"),
-    ("2. AI Crawler Simulation", "Authentic User-Agents"),
-    ("3. Evidence Collection",   "HTTP, DOM &amp; WAF signals"),
-    ("4. Grounded Detection",    "Factual classification"),
-    ("5. Remediation Engine",    "Synthesized code fixes"),
-]
-_pipeline_html = ""
-for _i, (_title, _sub) in enumerate(_pipeline_nodes):
-    _pipeline_html += (
-        f'<div class="pipeline-node">'
-        f'<div class="pipeline-node-title">{_title}</div>'
-        f'<div class="pipeline-node-sub">{_sub}</div>'
-        f'</div>'
-    )
-    if _i < len(_pipeline_nodes) - 1:
-        _pipeline_html += '<div class="pipeline-arrow">&rarr;</div>'
-
-st.markdown(
-    '<div class="trust-pipeline">'
-    '<div style="font-size:1.25rem;font-weight:800;color:#ffffff;letter-spacing:-0.02em;">'
-    '🛡️ Evidence-Based, Not Guesswork'
-    '</div>'
-    '<div style="font-size:0.9rem;color:var(--text-secondary);margin-top:0.4rem;max-width:820px;line-height:1.55;">'
-    'The system separates detected facts from inference and preserves uncertainty when the cause cannot be confidently determined. '
-    'Deductions and remediation recommendations are grounded in observed crawler telemetry and response evidence.'
-    '</div>'
-    f'<div class="pipeline-steps">{_pipeline_html}</div>'
-    '</div>',
-    unsafe_allow_html=True,
-)
-
-# -----------------------------------------------------------------------------
-# HOW IT WORKS SECTION
-# -----------------------------------------------------------------------------
-_hiw_steps = [
-    ("Step 01", "Enter Website",
-     "Input any public URL or staging sandbox to initiate the automated accessibility audit."),
-    ("Step 02", "Simulate AI Crawlers",
-     "Emulate supported AI crawler personas using authentic User-Agents and browser emulation."),
-    ("Step 03", "Detect Access Issues",
-     "Inspect robots.txt directives, X-Robots-Tag headers, meta robots tags, and edge WAF challenges."),
-    ("Step 04", "Get Actionable Fixes",
-     "Receive copy-paste ready robots.txt rules, web server configurations, and WAF rule adjustments."),
-]
-_hiw_cards = "".join(
-    f'<div class="hiw-step-card">'
-    f'<div class="hiw-step-num">{_num}</div>'
-    f'<div class="hiw-step-title">{_title}</div>'
-    f'<div class="hiw-step-desc">{_desc}</div>'
-    f'</div>'
-    for _num, _title, _desc in _hiw_steps
-)
-
-st.markdown(
-    '<div id="how-it-works">'
-    '<div style="font-size:1.25rem;font-weight:800;color:#ffffff;letter-spacing:-0.02em;margin-bottom:0.4rem;">'
-    '⚡ How It Works'
-    '</div>'
-    '<div style="font-size:0.9rem;color:var(--text-secondary);margin-bottom:1.2rem;">'
-    'Four high-precision phases ensuring comprehensive visibility into your website\'s AI search compatibility.'
-    '</div>'
-    f'<div class="how-it-works-grid">{_hiw_cards}</div>'
-    '</div>',
-    unsafe_allow_html=True,
-)

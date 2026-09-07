@@ -424,6 +424,156 @@ class ScoringEngine:
             "summary": cls._build_summary(final_score, penalties),
         }
 
+    @classmethod
+    def calculate_restriction(cls, audit_data: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Calculates an AI Restriction & Security Posture Score (0 - 100).
+        Symmetrical and logically consistent with Accessibility scoring:
+        - When an AI crawler is restricted (robots.txt disallow, rate limited, WAF challenge, CAPTCHA),
+          the restriction/security score reflects that the defense is actively enforced.
+        - When an AI crawler is unrestricted (200 OK, allowed in robots, unthrottled, no WAF),
+          deductions are applied for exposure gaps using the canonical penalty weights.
+        - If legitimate human browser traffic is blocked, a collateral disruption penalty is applied.
+        """
+        penalties: List[Dict[str, Any]] = []
+
+        normalized = cls._normalize_input(audit_data)
+        bots_data: Dict[str, Any] = normalized["bots"]
+        browser_data: Dict[str, Any] = normalized["browser"]
+        robots_data: Dict[str, Any] = normalized["robots_txt"]
+        has_real_baseline: bool = browser_data.get("is_real", False)
+
+        # 1. Robots.txt AI Restriction Evaluation
+        robots_ai_disallowed = robots_data.get("ai_disallowed", False)
+        robots_allowed = robots_data.get("is_allowed", True)
+        if not robots_ai_disallowed or robots_allowed is True:
+            _pts = cls.PENALTY_ROBOTS_AI_BLOCKED
+            penalties.append({
+                "category": "Exposure Gap",
+                "factor": "Unrestricted Robots.txt AI Policy",
+                "reason": "AI crawlers are permitted in robots.txt without declarative RFC 9309 Disallow boundaries.",
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "MEDIUM",
+                "detail": "Compliant AI crawlers (GPTBot, ClaudeBot, PerplexityBot) can index routes unrestricted.",
+                "evidence": ["robots.txt contains no Disallow directive targeting AI user-agents"],
+            })
+
+        # 2. Edge WAF / Anti-Bot Challenge Evaluation
+        unchallenged_bots = []
+        for b_name, b_info in bots_data.items():
+            st = b_info.get("status")
+            verd = str(b_info.get("verdict", "")).upper()
+            mech = str(b_info.get("mechanism", "NONE")).upper()
+            is_blocked = b_info.get("blocked", False) or verd in ("BLOCKED", "CHALLENGED")
+            has_waf = bool(b_info.get("waf")) or (mech not in ("NONE", "", "HTTP_FORBIDDEN", "INCONCLUSIVE") and "HTTP" not in mech)
+            has_captcha = bool(b_info.get("captcha"))
+            if not (is_blocked or has_waf or has_captcha or st in (401, 403, 429)):
+                unchallenged_bots.append(b_name)
+
+        if unchallenged_bots:
+            _pts = cls.PENALTY_WAF_CHALLENGE
+            penalties.append({
+                "category": "Exposure Gap",
+                "factor": "No Edge Anti-Bot / WAF Challenge",
+                "reason": "AI crawlers bypass edge defenses and reach origin server with HTTP 200 OK.",
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "HIGH",
+                "detail": f"Unchallenged access observed for: {', '.join(unchallenged_bots)}",
+                "evidence": [f"{b}: HTTP {bots_data[b].get('status', 200)} without challenge" for b in unchallenged_bots],
+            })
+
+        # 3. Rate Limiting Evaluation
+        unthrottled_bots = [
+            b_name for b_name, b_info in bots_data.items()
+            if b_info.get("status") != 429 and "RATE" not in str(b_info.get("mechanism", "")).upper()
+        ]
+        if len(unthrottled_bots) == len(bots_data) and bots_data:
+            _pts = cls.PENALTY_HTTP_429
+            penalties.append({
+                "category": "Exposure Gap",
+                "factor": "No AI Request Rate Limiting",
+                "reason": "No HTTP 429 throttling detected. High-frequency AI scrapers can overload origin servers.",
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "MEDIUM",
+                "detail": "Requests are served without velocity caps or concurrency limits.",
+                "evidence": ["No HTTP 429 Too Many Requests responses observed during crawling"],
+            })
+
+        # 4. Collateral Damage Evaluation (Legitimate traffic preservation)
+        browser_status = browser_data.get("status")
+        browser_blocked = browser_data.get("blocked", False)
+        if has_real_baseline and (browser_status in (401, 403, 429, 500, 502, 503) or browser_blocked):
+            _pts = cls.PENALTY_AI_DISCREPANCY
+            penalties.append({
+                "category": "Collateral Damage",
+                "factor": "Legitimate Browser Access Impairment",
+                "reason": "Anti-bot restrictions inadvertently block legitimate human desktop visitors.",
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "CRITICAL",
+                "detail": f"Desktop browser received HTTP {browser_status}. Security controls must preserve legitimate users.",
+                "evidence": [f"Standard browser baseline: HTTP {browser_status}"],
+            })
+
+        total_deductions = sum(p["points_deducted"] for p in penalties)
+        final_score = max(0, min(100, cls.BASE_SCORE - total_deductions))
+
+        if final_score >= 90:
+            grade = "A"
+            status_str = "ROBUSTLY RESTRICTED"
+            color = "#10b981"
+            risk_level = "LOW EXPOSURE RISK"
+        elif final_score >= 75:
+            grade = "B"
+            status_str = "MODERATELY RESTRICTED"
+            color = "#38bdf8"
+            risk_level = "MODERATE EXPOSURE RISK"
+        elif final_score >= 50:
+            grade = "C"
+            status_str = "PARTIALLY RESTRICTED"
+            color = "#f59e0b"
+            risk_level = "ELEVATED EXPOSURE RISK"
+        else:
+            grade = "F"
+            status_str = "UNRESTRICTED / EXPOSED"
+            color = "#ef4444"
+            risk_level = "CRITICAL EXPOSURE RISK"
+
+        reasons = [
+            f"[{p['severity']}] {p['factor']}: {p['detail']} ({p['penalty']} pts)"
+            for p in penalties
+        ]
+        if not reasons:
+            reasons = ["All major AI crawl restrictions (robots.txt, WAF, rate limits) are actively enforced."]
+
+        primary_bot = next(iter(bots_data.values()), {})
+        metrics = {
+            "http_status": primary_bot.get("status"),
+            "response_time_ms": primary_bot.get("latency_ms", 0),
+            "verdict": primary_bot.get("verdict", "RESTRICTED"),
+            "mechanism": primary_bot.get("mechanism", "NONE"),
+            "confidence": primary_bot.get("confidence", 0.0),
+            "robots_allowed": robots_data.get("is_allowed", not robots_ai_disallowed),
+            "page_text_length": primary_bot.get("text_length", 0),
+        }
+
+        return {
+            "score": final_score,
+            "grade": grade,
+            "risk_level": risk_level,
+            "status": status_str,
+            "color": color,
+            "reasons": reasons,
+            "metrics": metrics,
+            "base_score": cls.BASE_SCORE,
+            "total_deductions": total_deductions,
+            "penalties": penalties,
+            "summary": f"Security Posture: {status_str} ({final_score}/100 - Grade {grade}).",
+        }
+
     @staticmethod
     def _get_risk_level(score: int) -> str:
         """Determines risk level from final score."""
@@ -616,8 +766,10 @@ class ScoringEngine:
 
 
 # Helper convenience function
-def calculate_score(audit_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Convenience functional interface for scoring."""
+def calculate_score(audit_data: Dict[str, Any], mode: str = "ACCESSIBILITY") -> Dict[str, Any]:
+    """Convenience functional interface for scoring, supporting ACCESSIBILITY and RESTRICTION modes."""
+    if str(mode).upper().startswith("RESTRICT") or str(mode).upper().startswith("SECURITY"):
+        return ScoringEngine.calculate_restriction(audit_data)
     return ScoringEngine.calculate(audit_data)
 
 

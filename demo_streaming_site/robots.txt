@@ -2,10 +2,10 @@ User-agent: *
 Allow: /
 
 User-agent: GPTBot
-Disallow: /
 
+Allow: /
 User-agent: ClaudeBot
-Disallow: /
 
+Allow: /
 User-agent: PerplexityBot
 Disallow: /
