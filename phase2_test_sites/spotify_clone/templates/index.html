@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="content-section">
+    <h2>Featured Albums</h2>
+    <div class="card-grid">
+        {% for album in albums %}
+        <a href="/album/{{ album.id }}" class="card">
+            <div class="card-img"></div>
+            <div class="card-title">{{ album.title }}</div>
+            <div class="card-subtitle">{{ album.artist }}</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="content-section">
+    <h2>Popular Artists</h2>
+    <div class="card-grid">
+        {% for artist in artists %}
+        <a href="/artist/{{ artist.id }}" class="card">
+            <div class="card-img" style="border-radius: 50%;"></div>
+            <div class="card-title">{{ artist.name }}</div>
+            <div class="card-subtitle">Artist</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

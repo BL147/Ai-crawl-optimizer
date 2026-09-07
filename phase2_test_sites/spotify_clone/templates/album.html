@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="header-meta">
+    <div class="header-art"></div>
+    <div class="header-info">
+        <span class="header-type">Album</span>
+        <h1 class="header-title">{{ album.title }}</h1>
+        <span class="header-stats"><a href="/artist/{{ artist.id }}">{{ artist.name }}</a> • {{ album.year }} • {{ album.tracks|length }} songs</span>
+    </div>
+</div>
+<div class="content-section">
+    <table class="tracklist">
+        <tr>
+            <th class="track-num">#</th>
+            <th>Title</th>
+        </tr>
+        {% for track in album.tracks %}
+        <tr>
+            <td class="track-num">{{ loop.index }}</td>
+            <td>{{ track }}</td>
+        </tr>
+        {% endfor %}
+    </table>
+</div>
+{% endblock %}

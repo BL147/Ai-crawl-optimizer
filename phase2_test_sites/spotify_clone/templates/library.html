@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="content-section">
+    <h2>Your Library</h2>
+    <div class="card-grid">
+        {% for playlist in playlists %}
+        <a href="/playlist/{{ playlist.id }}" class="card">
+            <div class="card-img"></div>
+            <div class="card-title">{{ playlist.title }}</div>
+            <div class="card-subtitle">Playlist</div>
+        </a>
+        {% endfor %}
+        {% for album in albums %}
+        <a href="/album/{{ album.id }}" class="card">
+            <div class="card-img"></div>
+            <div class="card-title">{{ album.title }}</div>
+            <div class="card-subtitle">Album</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

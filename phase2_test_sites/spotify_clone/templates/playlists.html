@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="content-section">
+    <h2>Featured Playlists</h2>
+    <div class="card-grid">
+        {% for playlist in playlists %}
+        <a href="/playlist/{{ playlist.id }}" class="card">
+            <div class="card-img"></div>
+            <div class="card-title">{{ playlist.title }}</div>
+            <div class="card-subtitle">{{ playlist.description }}</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

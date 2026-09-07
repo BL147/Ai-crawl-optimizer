@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Streamify - Web Player</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="sidebar">
+        <h1>Streamify</h1>
+        <div class="nav-links">
+            <a href="/">Home</a>
+            <a href="/search">Search</a>
+            <a href="/library">Your Library</a>
+            <a href="/playlists">Playlists</a>
+        </div>
+    </div>
+    
+    <div class="main-view">
+        {% block content %}{% endblock %}
+    </div>
+
+    <div class="now-playing-bar">
+        <div class="np-left">
+            <div class="np-art"></div>
+            <div class="np-info">
+                <span class="np-title">Neon Rain</span>
+                <span class="np-artist">Neon Synthex</span>
+            </div>
+        </div>
+        <div class="np-center">
+            <div class="np-controls">
+                <button class="np-control-btn">⏮</button>
+                <button class="np-control-btn play">▶</button>
+                <button class="np-control-btn">⏭</button>
+            </div>
+            <div class="np-progress">
+                <span>0:00</span>
+                <div class="np-bar"><div class="np-bar-fill"></div></div>
+                <span>3:42</span>
+            </div>
+        </div>
+        <div class="np-right"></div>
+    </div>
+</body>
+</html>

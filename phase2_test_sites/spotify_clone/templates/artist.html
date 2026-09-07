@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="header-meta">
+    <div class="header-art artist"></div>
+    <div class="header-info">
+        <span class="header-type">Artist</span>
+        <h1 class="header-title">{{ artist.name }}</h1>
+        <span class="header-stats">{{ artist.listeners }} monthly listeners</span>
+    </div>
+</div>
+<div class="content-section">
+    <p>{{ artist.bio }}</p>
+</div>
+<div class="content-section">
+    <h2>Albums by {{ artist.name }}</h2>
+    <div class="card-grid">
+        {% for album in albums %}
+        <a href="/album/{{ album.id }}" class="card">
+            <div class="card-img"></div>
+            <div class="card-title">{{ album.title }}</div>
+            <div class="card-subtitle">{{ album.year }}</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}

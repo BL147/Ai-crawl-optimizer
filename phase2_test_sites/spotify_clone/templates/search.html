@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="content-section">
+    <h2>Search</h2>
+    <input type="text" placeholder="What do you want to listen to?" style="width:100%; max-width:400px; padding:12px; border-radius:20px; border:none; margin-bottom:24px;">
+    
+    <h3>Browse All</h3>
+    <div class="card-grid">
+        <a href="/playlists" class="card" style="background: linear-gradient(135deg, #E8115B, #000);">
+            <div class="card-title">Playlists</div>
+        </a>
+        <a href="/library" class="card" style="background: linear-gradient(135deg, #1DB954, #000);">
+            <div class="card-title">Library</div>
+        </a>
+        {% for artist in artists %}
+        <a href="/artist/{{ artist.id }}" class="card" style="background: linear-gradient(135deg, #148a08, #000);">
+            <div class="card-title">{{ artist.name }}</div>
+        </a>
+        {% endfor %}
+    </div>
+</div>
+{% endblock %}
