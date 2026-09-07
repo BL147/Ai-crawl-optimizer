@@ -1848,7 +1848,7 @@ def verify_ai_agent_token(request):
             with restr_prog.container():
                 st.info(f"🛡️ Step 2/3: Enforcing '{selected_control_id}' via canonical RestrictionEngine...")
             restr_res = apply_restriction(
-                restriction_id=selected_control_id,
+                control_id=selected_control_id,
                 target=env_id,
                 options={
                     "personas": target_personas,
@@ -1903,7 +1903,7 @@ def verify_ai_agent_token(request):
 
             start_server(port=5050)
             rem_res = remove_restriction(
-                restriction_id=selected_control_id,
+                control_id=selected_control_id,
                 target=env_id,
                 options={"personas": target_personas}
             )
