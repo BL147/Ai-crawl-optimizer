@@ -147,7 +147,7 @@ def test_controlled_crawler_schema_pipeline():
         }
     }
     base_score = calculate_score(baseline_fixture)
-    assert any("Discrepancy" in p["factor"] for p in base_score["penalties"]), "Baseline discrepancy must trigger AI Discrepancy penalty"
+    assert any(p["factor"] == "Selective AI Crawler Blocking" for p in base_score["penalties"]), "Baseline discrepancy must trigger Selective AI Crawler Blocking penalty"
     print("  [PASS] 1.4 Baseline comparison: Selective AI block discrepancy penalty evaluated")
 
 
@@ -163,61 +163,64 @@ def test_live_pipeline_sandbox():
     print(f"  [>] Sandbox server started at: {sandbox_url}")
     time.sleep(0.5)
 
-    # -------------------------------------------------------------
-    # PHASE A: BEFORE MODE (AI Crawl Blocked)
-    # -------------------------------------------------------------
-    print("  [>] Testing BEFORE Mode (Simulated WAF Challenge / 403 on AI Bots)...")
-    set_mode("before")
-    assert get_mode() == "before"
+    try:
+        # -------------------------------------------------------------
+        # PHASE A: BEFORE MODE (AI Crawl Blocked)
+        # -------------------------------------------------------------
+        print("  [>] Testing BEFORE Mode (Simulated WAF Challenge / 403 on AI Bots)...")
+        set_mode("before")
+        assert get_mode() == "before"
 
-    result_before = run_audit(sandbox_url, persona="gptbot")
+        result_before = run_audit(sandbox_url, persona="gptbot")
 
-    # 1. Verify Minimum Mandated Keys
-    mandated_keys = ["crawl", "score", "risk_level", "reasons", "metrics", "remediation"]
-    for k in mandated_keys:
-        assert k in result_before, f"Missing mandated key '{k}' in run_audit result"
+        # 1. Verify Minimum Mandated Keys
+        mandated_keys = ["crawl", "score", "risk_level", "reasons", "metrics", "remediation"]
+        for k in mandated_keys:
+            assert k in result_before, f"Missing mandated key '{k}' in run_audit result"
 
-    # 2. Verify Scoring Output
-    assert isinstance(result_before["score"], (int, float)), "Score must be numeric"
-    assert result_before["score"] < 50, f"Expected Grade F in BEFORE mode, got {result_before['score']}"
-    assert result_before["risk_level"] in ["CRITICAL", "HIGH"], f"Expected high/critical risk, got {result_before['risk_level']}"
-    assert isinstance(result_before["reasons"], list) and len(result_before["reasons"]) > 0
+        # 2. Verify Scoring Output
+        assert isinstance(result_before["score"], (int, float)), "Score must be numeric"
+        assert result_before["score"] < 50, f"Expected Grade F in BEFORE mode, got {result_before['score']}"
+        assert result_before["risk_level"] in ["CRITICAL", "HIGH"], f"Expected high/critical risk, got {result_before['risk_level']}"
+        assert isinstance(result_before["reasons"], list) and len(result_before["reasons"]) > 0
 
-    # 3. Verify Metrics Output
-    m_before = result_before["metrics"]
-    assert "http_status" in m_before
-    assert "verdict" in m_before
-    assert "mechanism" in m_before
-    assert "robots_allowed" in m_before
+        # 3. Verify Metrics Output
+        m_before = result_before["metrics"]
+        assert "http_status" in m_before
+        assert "verdict" in m_before
+        assert "mechanism" in m_before
+        assert "robots_allowed" in m_before
 
-    # 4. Verify Remediation Output
-    rem_before = result_before["remediation"]
-    assert isinstance(rem_before, dict)
-    assert "problem_detected" in rem_before or "problem" in rem_before
-    assert "code_or_configuration_change" in rem_before or "code_or_config" in rem_before
+        # 4. Verify Remediation Output
+        rem_before = result_before["remediation"]
+        assert isinstance(rem_before, dict)
+        assert "problem_detected" in rem_before or "problem" in rem_before
+        assert "code_or_configuration_change" in rem_before or "code_or_config" in rem_before
 
-    print(f"    --> Score: {result_before['score']}/100 | Risk: {result_before['risk_level']}")
-    print(f"    --> Reasons count: {len(result_before['reasons'])}")
-    print("  [PASS] 2.1 Live BEFORE Mode verified with full pipeline")
+        print(f"    --> Score: {result_before['score']}/100 | Risk: {result_before['risk_level']}")
+        print(f"    --> Reasons count: {len(result_before['reasons'])}")
+        print("  [PASS] 2.1 Live BEFORE Mode verified with full pipeline")
 
-    # -------------------------------------------------------------
-    # PHASE B: AFTER MODE (AI Optimized / 200 OK)
-    # -------------------------------------------------------------
-    print("  [>] Testing AFTER Mode (AI Optimized 200 OK)...")
-    set_mode("after")
-    assert get_mode() == "after"
+        # -------------------------------------------------------------
+        # PHASE B: AFTER MODE (AI Optimized / 200 OK)
+        # -------------------------------------------------------------
+        print("  [>] Testing AFTER Mode (AI Optimized 200 OK)...")
+        set_mode("after")
+        assert get_mode() == "after"
 
-    result_after = run_audit(sandbox_url, persona="gptbot")
+        result_after = run_audit(sandbox_url, persona="gptbot")
 
-    for k in mandated_keys:
-        assert k in result_after, f"Missing mandated key '{k}' in run_audit result"
+        for k in mandated_keys:
+            assert k in result_after, f"Missing mandated key '{k}' in run_audit result"
 
-    assert result_after["score"] >= 90, f"Expected Grade A (>=90) in AFTER mode, got {result_after['score']}"
-    assert result_after["risk_level"] == "LOW", f"Expected LOW risk in AFTER mode, got {result_after['risk_level']}"
-    assert result_after["metrics"]["http_status"] == 200
+        assert result_after["score"] >= 90, f"Expected Grade A (>=90) in AFTER mode, got {result_after['score']}"
+        assert result_after["risk_level"] == "LOW", f"Expected LOW risk in AFTER mode, got {result_after['risk_level']}"
+        assert result_after["metrics"]["http_status"] == 200
 
-    print(f"    --> Score: {result_after['score']}/100 | Risk: {result_after['risk_level']}")
-    print("  [PASS] 2.2 Live AFTER Mode verified with full pipeline")
+        print(f"    --> Score: {result_after['score']}/100 | Risk: {result_after['risk_level']}")
+        print("  [PASS] 2.2 Live AFTER Mode verified with full pipeline")
+    finally:
+        set_mode("before")
 
 
 # ============================================================================

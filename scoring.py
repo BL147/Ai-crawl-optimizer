@@ -461,6 +461,8 @@ class ScoringEngine:
             bb = audit_data.get("baseline_browser", {})
             bot_entry = cls._extract_single_bot(tp)
             browser_entry = cls._extract_single_bot(bb)
+            if bb and isinstance(browser_entry.get("status"), int):
+                browser_entry["is_real"] = True
             return {
                 "bots": {tp.get("persona", "gptbot"): bot_entry},
                 "browser": browser_entry,

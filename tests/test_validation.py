@@ -279,6 +279,7 @@ class TestFixValidationEngine(unittest.TestCase):
         """Live sandbox execution: BEFORE mode -> apply fix (AFTER mode) -> VERIFIED."""
         sandbox_url = start_sandbox(port=5065)
         set_mode("before")
+        self.addCleanup(set_mode, "before")
         self.assertEqual(get_mode(), "before")
 
         # Define fix action: programmatically toggle sandbox to AFTER mode via backend function
@@ -302,6 +303,7 @@ class TestFixValidationEngine(unittest.TestCase):
         """Live sandbox execution: BEFORE mode -> no-op fix (remains BEFORE mode) -> FAILED."""
         sandbox_url = start_sandbox(port=5065)
         set_mode("before")
+        self.addCleanup(set_mode, "before")
         self.assertEqual(get_mode(), "before")
 
         # Fix action fails or does not resolve the issue

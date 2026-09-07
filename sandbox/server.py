@@ -248,19 +248,44 @@ def get_mode() -> str:
     return CURRENT_MODE
 
 
+import socket
+import urllib.request
+
+_server_threads = {}
+_server_lock = threading.Lock()
 _server_thread = None
 
+
+def _is_port_in_use(port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
 def start_sandbox(port: int = 5050) -> str:
-    """Starts sandbox in background daemon thread if not already running."""
-    global _server_thread
-    if _server_thread is None or not _server_thread.is_alive():
-        _server_thread = threading.Thread(
-            target=lambda: app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False),
-            daemon=True
-        )
-        _server_thread.start()
-        time.sleep(1.0)  # Brief pause to bind port
+    """Starts sandbox in background daemon thread if not already running on the given port."""
+    global _server_threads, _server_thread
+    with _server_lock:
+        thread = _server_threads.get(port)
+        if thread is None or not thread.is_alive():
+            if not _is_port_in_use(port):
+                t = threading.Thread(
+                    target=lambda: app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False),
+                    daemon=True
+                )
+                t.start()
+                _server_threads[port] = t
+                _server_thread = t
+
+            # Wait until the server is responsive on this port
+            deadline = time.time() + 5.0
+            while time.time() < deadline:
+                try:
+                    with urllib.request.urlopen(f"http://127.0.0.1:{port}/api/sandbox/mode", timeout=0.5):
+                        break
+                except Exception:
+                    time.sleep(0.05)
     return f"http://127.0.0.1:{port}"
+
 
 
 if __name__ == "__main__":
