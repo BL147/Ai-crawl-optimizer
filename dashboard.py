@@ -9,7 +9,17 @@ import pandas as pd
 
 from crawler import list_personas
 from demo_streaming_site.app import start_server
-from fix_engine import apply_fix, get_default_registry
+from fix_engine import (
+    apply_fix,
+    get_default_registry,
+    apply_restriction,
+    remove_restriction,
+    RestrictionEngine,
+    RestrictionStatus,
+    RestrictionCapability,
+    RestrictionCategory,
+    RESTRICTION_CATALOG,
+)
 from orchestration import run_audit
 from scoring import calculate_score
 from validation import compare_and_validate, ValidationStatus, FixStatus, TargetIssue, IssueCategory
@@ -608,6 +618,53 @@ st.markdown("""
         align-items: center;
         gap: 0.75rem;
     }
+    /* Phase 3 Restriction & Security Styles */
+    .phase3-container {
+        background: linear-gradient(180deg, rgba(30, 27, 75, 0.45) 0%, rgba(15, 23, 42, 0.6) 100%);
+        border: 1px solid rgba(168, 85, 247, 0.35);
+        border-radius: 16px;
+        padding: 1.8rem;
+        margin-top: 1.5rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.5);
+    }
+    .phase3-header {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+        padding-bottom: 1.2rem;
+        margin-bottom: 1.4rem;
+    }
+    .phase3-badge {
+        font-size: 0.75rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 0.3rem 0.8rem;
+        border-radius: 9999px;
+        background: rgba(168, 85, 247, 0.15);
+        border: 1px solid rgba(168, 85, 247, 0.4);
+        color: #d8b4fe;
+    }
+    .cap-badge-supported {
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 0.2rem 0.55rem;
+        border-radius: 6px;
+        background: rgba(16, 185, 129, 0.15);
+        border: 1px solid rgba(16, 185, 129, 0.4);
+        color: #34d399;
+    }
+    .cap-badge-rec {
+        font-size: 0.72rem;
+        font-weight: 700;
+        padding: 0.2rem 0.55rem;
+        border-radius: 6px;
+        background: rgba(245, 158, 11, 0.15);
+        border: 1px solid rgba(245, 158, 11, 0.4);
+        color: #fbbf24;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -631,7 +688,8 @@ st.markdown(f"""
         <a class="nav-item active" href="#hero">Dashboard</a>
         <a class="nav-item" href="#audit-config">Audit</a>
         <a class="nav-item" href="#results-section">Results</a>
-        <a class="nav-item" href="#phase2-section">Validate Fix</a>
+        <a class="nav-item" href="#phase2-section">Phase 2 Fix</a>
+        <a class="nav-item" href="#phase3-section">Phase 3 Control</a>
         <a class="nav-item" href="#how-it-works">How It Works</a>
     </div>
     <div>
@@ -688,6 +746,15 @@ with st.form("audit_config_form"):
     </div>
     """, unsafe_allow_html=True)
 
+    security_mode = st.radio(
+        "AI WORKFLOW MODE:",
+        options=["AI ACCESSIBILITY (Optimize & Fix)", "AI RESTRICTION (Security & Control)"],
+        horizontal=True,
+        index=0,
+        help="Accessibility evaluates how AI crawlers can reach your site. Restriction presents security controls and guidance to protect proprietary data."
+    )
+    st.caption("Choose whether your goal is maximizing AI discoverability (Phase 2) or enforcing AI crawl boundaries (Phase 3).")
+
     col_url, col_mode = st.columns([3, 2])
     with col_url:
         url_input = st.text_input(
@@ -739,7 +806,11 @@ with st.form("audit_config_form"):
         st.caption("Compare AI crawler behavior against a standard browser to detect selective blocking.")
 
     st.markdown("<div style=\"margin-top: 0.5rem;\"></div>", unsafe_allow_html=True)
-    submit_button = st.form_submit_button("⚡ Run AI Accessibility Audit", type="primary", use_container_width=True)
+    submit_button = st.form_submit_button(
+        "⚡ Run AI Accessibility Audit" if "ACCESSIBILITY" in security_mode else "🛡️ Run AI Restriction Audit",
+        type="primary",
+        use_container_width=True
+    )
 
 # -----------------------------------------------------------------------------
 # SUPPORTED AI CRAWLERS (CHIPS GRID - DYNAMIC FROM REGISTRY)
@@ -778,6 +849,34 @@ def normalize_url(url: str) -> str:
     if not url.startswith(("http://", "https://")):
         url = "https://" + url
     return url
+
+
+def is_controlled_test_environment(target: str, registry=None) -> bool:
+    """Check if target is a registered, controlled local test environment."""
+    if registry is None:
+        registry = get_default_registry()
+    try:
+        return bool(registry.is_allowed(target))
+    except Exception:
+        return False
+
+
+def _restriction_status(result: Dict[str, Any]) -> str:
+    """Translate crawler telemetry and evidence into restriction status language."""
+    http_status = result.get("http", {}).get("status_code")
+    inference = result.get("detection", {}).get("inference", {})
+    verdict = str(inference.get("verdict", "")).upper()
+    mechanism = str(inference.get("mechanism", "")).upper()
+
+    if http_status == 429 or mechanism == "RATE_LIMIT":
+        return "AI Requests Rate Limited / Blocked (HTTP 429)"
+    if verdict == "CHALLENGED" or mechanism in {"CAPTCHA", "CLOUDFLARE_CHALLENGE"}:
+        return "AI Verification Challenge Required"
+    if result.get("robots_txt", {}).get("is_allowed") is False or verdict in {"BLOCKED", "RESTRICTED"}:
+        return "AI Crawl Restricted by Policy"
+    if verdict == "ACCESSIBLE" or (http_status and 200 <= http_status < 300):
+        return "AI Accessible (Unrestricted)"
+    return "Inconclusive / Indeterminate"
 
 
 def _build_aggregate_payload(results: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -1000,6 +1099,7 @@ if submit_button:
     else:
         norm_url = normalize_url(url_input)
         st.session_state["target_input"] = norm_url
+        st.session_state["audit_security_mode"] = "AI RESTRICTION" if "RESTRICTION" in security_mode else "AI ACCESSIBILITY"
 
         if "5050" in norm_url or "demo_streaming_site" in norm_url:
             try:
@@ -1515,256 +1615,751 @@ if "audit_results" in st.session_state:
                 st.markdown(f"- [ ] {step}")
 
     # =========================================================================
-    # PHASE 2: VALIDATE FIX ON TEST ENVIRONMENT
+    # PHASE 3 RESTRICTION / SECURITY WORKFLOW IMPLEMENTATION
     # =========================================================================
-    st.markdown("<div id=\"phase2-section\"></div>", unsafe_allow_html=True)
+    def _render_phase3_restriction_mode(
+        audit_url: str,
+        results: List[Dict[str, Any]],
+        registry: Any,
+    ) -> None:
+        """Render Phase 3 AI Crawl Restriction & Security Control workflow."""
+        st.markdown("<div id=\"phase3-section\"></div>", unsafe_allow_html=True)
 
-    registry = get_default_registry()
-    env_list = registry.list_environments()
-    default_env = env_list[0] if env_list else None
-    test_env_name = default_env.get("description") if default_env else "CineStream Streaming Platform Demo Website"
-    test_env_url = default_env.get("base_url") if default_env else "http://127.0.0.1:5050"
-    test_env_id = default_env.get("id") if default_env else "demo_streaming_site"
-
-    # Extract detected issue & recommended fix from current audit results
-    primary_crawl = primary_res.get("crawl", primary_res)
-    primary_det = primary_crawl.get("detection", {})
-    primary_inf = primary_det.get("inference", {})
-    primary_mech = str(primary_inf.get("mechanism", "NONE")).upper()
-    primary_robots = primary_res.get("robots_txt", {})
-    rem_info = primary_res.get("remediation", {})
-
-    detected_issue_desc = "GPTBot is restricted by robots.txt"
-    recommended_fix_desc = "Allow AI crawler access in robots.txt"
-    chosen_fix_id = "robots_txt"
-
-    if not primary_robots.get("is_allowed", True):
-        detected_issue_desc = f"{primary_res.get('persona', 'GPTBot').title()} is restricted by robots.txt policy"
-        recommended_fix_desc = "Allow AI crawler access in robots.txt"
-        chosen_fix_id = "robots_txt"
-    elif primary_mech in ("CLOUDFLARE_CHALLENGE", "CLOUDFLARE_BLOCK", "CAPTCHA"):
-        detected_issue_desc = f"AI crawler blocked by anti-bot challenge ({primary_mech})"
-        recommended_fix_desc = rem_info.get("recommended_fix", "Configure WAF bypass rule for verified AI bots")
-        chosen_fix_id = "robots_txt"
-    elif (primary_res.get("http", {}).get("response_time_ms") or 0) > 3000:
-        detected_issue_desc = f"Excessive crawler response latency ({primary_res.get('http', {}).get('response_time_ms', 0):.0f}ms)"
-        recommended_fix_desc = "Optimize endpoint latency and reduce simulated server delay"
-        chosen_fix_id = "latency"
-    elif penalties:
-        detected_issue_desc = penalties[0].get("factor", "AI Crawlability Friction Flagged")
-        recommended_fix_desc = rem_info.get("recommended_fix", "Apply recommended configuration fix")
-        chosen_fix_id = "robots_txt"
-
-    st.markdown(f"""
-    <div class="phase2-container">
-        <div class="phase2-header">
-            <div>
-                <span class="phase2-badge">Phase 2 Verification Workflow</span>
-                <div style="font-size: 1.45rem; font-weight: 800; color: #ffffff; margin-top: 0.4rem;">
-                    🛠️ Validate Fix on Test Environment
-                </div>
-            </div>
-            <div style="text-align: right;">
-                <span style="font-size: 0.8rem; color: #94a3b8;">Target Environment</span><br>
-                <strong style="color: #38bdf8; font-size: 0.95rem;">{test_env_name}</strong>
-            </div>
-        </div>
-
-        <div class="controlled-env-callout">
-            <span style="font-size: 1.2rem;">🔒</span>
-            <div>
-                <strong>CONTROLLED TEST ENVIRONMENT ONLY:</strong> Arbitrary URL modifications and direct filesystem edits are strictly prohibited by the security allowlist. Fixes are applied deterministically via the Fix Application Engine.
-            </div>
-        </div>
-
-        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.2rem;">
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 1rem;">
-                <span style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #f87171;">Detected Issue</span>
-                <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-top: 0.3rem;">{detected_issue_desc}</div>
-            </div>
-            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 1rem;">
-                <span style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #818cf8;">Recommended Fix</span>
-                <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-top: 0.3rem;">{recommended_fix_desc}</div>
-            </div>
-        </div>
-    </div>
-    """, unsafe_allow_html=True)
-
-    col_btn, col_info = st.columns([2, 3])
-    with col_btn:
-        run_fix_val = st.button(
-            "⚡ Apply Fix & Validate",
-            type="primary",
-            use_container_width=True,
-            help="Executes the backend Fix Application Engine on the controlled test environment and validates results via Re-crawl."
-        )
-    with col_info:
-        st.caption(f"Applies `{chosen_fix_id}` to `{test_env_id}` ({test_env_url}), performs live re-crawl, and executes Before vs. After validation.")
-
-    if run_fix_val:
-        fix_progress = st.empty()
-        with fix_progress.container():
-            st.info("🔄 Initiating Phase 2 Fix Application & Validation Flow...")
-
-        # Ensure CineStream server is running on port 5050
-        try:
-            start_server(port=5050)
-        except Exception:
-            pass
-
-        # 1. Baseline Audit (BEFORE) on test environment
-        audit_before = primary_res
-        # If the currently audited URL is not the test environment, run an audit on the test environment first
-        if not (audit_url and test_env_url in audit_url):
-            with fix_progress.container():
-                st.info(f"📡 Step 1/3: Running initial baseline crawl on {test_env_name} ({test_env_url})...")
-            audit_before = run_audit(
-                test_env_url,
-                persona=primary_res.get("persona", "gptbot"),
-                include_baseline=True,
-                headless=True,
-                timeout_seconds=12.0
-            )
-
-        # 2. Call backend Fix Application Engine
-        with fix_progress.container():
-            st.info(f"🔧 Step 2/3: Applying '{chosen_fix_id}' via Fix Application Engine...")
-        fix_res = apply_fix(
-            fix_id=chosen_fix_id,
-            target=test_env_id,
-            options={"personas": [primary_res.get("persona", "gptbot")]}
-        )
-
-        # 3. Call backend Re-crawl (AFTER)
-        with fix_progress.container():
-            st.info(f"📡 Step 3/3: Re-crawling test environment to collect post-fix telemetry...")
-        audit_after = run_audit(
-            test_env_url,
-            persona=primary_res.get("persona", "gptbot"),
-            include_baseline=True,
-            headless=True,
-            timeout_seconds=12.0
-        )
-
-        # 4. Call backend Validation Engine
-        val_result = compare_and_validate(
-            audit_before=audit_before,
-            audit_after=audit_after,
-            fix_status=fix_res.get("status", "APPLIED"),
-            target_issue=chosen_fix_id,
-        )
-
-        fix_progress.empty()
-        st.session_state["phase2_validation_result"] = val_result
-        st.session_state["phase2_audit_before"] = audit_before
-        st.session_state["phase2_audit_after"] = audit_after
-        st.session_state["phase2_fix_res"] = fix_res
-
-    # Render Phase 2 Validation Results if available
-    if "phase2_validation_result" in st.session_state:
-        v_res = st.session_state["phase2_validation_result"]
-        a_before = st.session_state["phase2_audit_before"]
-        a_after = st.session_state["phase2_audit_after"]
-        f_res = st.session_state["phase2_fix_res"]
-
-        v_status = v_res.get("validation_status")
-        status_val = v_status.value if hasattr(v_status, "value") else str(v_status)
-
-        b_score = v_res.get("before_score", 0)
-        a_score = v_res.get("after_score", 0)
-        delta = v_res.get("score_delta", a_score - b_score)
-        delta_str = f"+{delta}" if delta > 0 else str(delta)
-
-        # Determine banner styling and icon
-        if status_val == "VERIFIED":
-            banner_class = "val-banner-verified"
-            banner_icon = "✓"
-            banner_title = "FIX VERIFIED"
-        elif status_val == "PARTIALLY_VERIFIED":
-            banner_class = "val-banner-partially"
-            banner_icon = "⚠️"
-            banner_title = "PARTIALLY VERIFIED"
-        elif status_val == "INCONCLUSIVE":
-            banner_class = "val-banner-inconclusive"
-            banner_icon = "❓"
-            banner_title = "INCONCLUSIVE RESULT"
-        else:
-            banner_class = "val-banner-failed"
-            banner_icon = "✗"
-            banner_title = "FIX VALIDATION FAILED"
+        controlled = is_controlled_test_environment(audit_url, registry)
+        env = registry.get(audit_url) or registry.get("demo_streaming_site")
+        env_name = env.description if env else "CineStream Streaming Platform Demo Website"
+        env_url = env.base_url if env else "http://127.0.0.1:5050"
+        env_id = env.id if env else "demo_streaming_site"
 
         st.markdown(f"""
-        <div style="margin-top: 1.5rem;">
-            <div class="{banner_class}">
-                <span style="font-size: 1.8rem; font-weight: 900;">{banner_icon}</span>
+        <div class="phase3-container">
+            <div class="phase3-header">
                 <div>
-                    <div style="font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em;">{banner_title}</div>
-                    <div style="font-size: 0.85rem; opacity: 0.9; margin-top: 0.15rem;">
-                        Backend Validation Engine evaluated Before vs. After crawler behavior on the test environment.
+                    <span class="phase3-badge">Phase 3 Security & Control Engine</span>
+                    <div style="font-size: 1.45rem; font-weight: 800; color: #ffffff; margin-top: 0.4rem;">
+                        🛡️ AI Crawl Restriction & Security Mode
+                    </div>
+                </div>
+                <div style="text-align: right;">
+                    <span style="font-size: 0.8rem; color: #94a3b8;">Active Target</span><br>
+                    <strong style="color: #c084fc; font-size: 0.95rem;">{env_name if controlled else audit_url}</strong>
+                </div>
+            </div>
+            <div style="font-size: 0.92rem; color: #cbd5e1; line-height: 1.55; margin-bottom: 1.2rem;">
+                Control, restrict, and validate AI crawler access boundaries on your web assets.
+                Evaluate exposure across leading AI agents, enforce security controls, and verify enforcement using the canonical validation engine.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # 1. Educational Context: Why restrict AI crawling?
+        with st.expander("ℹ️ Understanding AI Crawl Restriction: Why, When, and How", expanded=False):
+            c1, c2 = st.columns(2)
+            with c1:
+                st.markdown("""
+                **Why Restrict AI Crawling?**
+                - **Copyright & Training Data Ingestion**: Prevent commercial LLM foundation models from scraping proprietary writing, creative works, and media without attribution or compensation.
+                - **Bandwidth & Server Load Protection**: High-frequency AI scrapers can overwhelm origin servers, cause latency degradation, and spike cloud ingress/egress bills.
+                """)
+            with c2:
+                st.markdown("""
+                **Control Mechanisms:**
+                - **Robots.txt Policy**: RFC 9309 declarative boundary honored by compliant AI models.
+                - **Rate Limiting (HTTP 429)**: Throttling request velocity at reverse proxy or CDN edge.
+                - **Edge WAF Challenges (HTTP 403)**: Intercepting automated traffic with bot management.
+                - **Interactive CAPTCHAs**: Distinguishing human visitors from automated agents.
+                - **Authentication / Paywalls**: Strict token or session verification for private content.
+                """)
+
+        # 2. Observed AI Exposure Matrix
+        st.markdown("#### 📡 Observed AI Crawler Exposure")
+        st.caption("Observed access state across evaluated AI crawler personas based on recent audit telemetry.")
+
+        exposure_rows = []
+        for r in results:
+            p_name = str(r.get("persona", "Unknown")).replace("_", " ").title()
+            status_text = _restriction_status(r)
+            http_code = r.get("http", {}).get("status_code") or (r.get("crawl", {}).get("http", {}).get("status_code")) or "N/A"
+            det_inf = r.get("detection", {}).get("inference", {}) or r.get("crawl", {}).get("detection", {}).get("inference", {})
+            verdict = det_inf.get("verdict", "UNKNOWN")
+            exposure_rows.append({
+                "AI Crawler": p_name,
+                "Observed Restriction Status": status_text,
+                "HTTP Code": http_code,
+                "Verdict": verdict,
+            })
+        st.dataframe(pd.DataFrame(exposure_rows), use_container_width=True, hide_index=True)
+
+        # 3. External Site Safety Guarantee
+        if not controlled:
+            st.warning(
+                f"🔒 **EXTERNAL TARGET SAFETY GUARANTEE ({audit_url}):** "
+                "To guarantee safety and prevent unauthorized modifications, automated restriction enforcement, live re-crawling, "
+                "and removal actions are strictly disabled on external websites. "
+                "The recommendations below provide verified configuration guidance for production deployment."
+            )
+            st.caption("🛡️ No external provider configurations (Cloudflare, Akamai, reCAPTCHA, origin servers) are modified.")
+
+            recs = [
+                (
+                    "1. Robots.txt AI Restriction",
+                    "RECOMMENDATION ONLY",
+                    "Add crawler-specific Disallow directives for AI user-agents in your robots.txt file.",
+                    "User-agent: GPTBot\nUser-agent: ClaudeBot\nUser-agent: PerplexityBot\nUser-agent: CCBot\nUser-agent: Bytespider\nDisallow: /",
+                    "Compliant AI crawlers (OpenAI, Anthropic, Perplexity) parse and honor RFC 9309 rules before scraping, protecting your content without impacting search engines like Googlebot."
+                ),
+                (
+                    "2. AI Crawler Rate Limiting",
+                    "RECOMMENDATION ONLY",
+                    "Configure edge rate limits in Nginx or CDN WAF to return HTTP 429 Too Many Requests for AI bot user-agents.",
+                    "# Nginx configuration snippet\nlimit_req_zone $binary_remote_addr zone=ai_limit:10m rate=1r/s;\nif ($http_user_agent ~* (GPTBot|ClaudeBot|Bytespider)) {\n    return 429;\n}",
+                    "Protects server capacity and prevents scraper DDoS attacks while ensuring standard human visitors experience fast response times."
+                ),
+                (
+                    "3. Edge WAF / Bot Challenge",
+                    "RECOMMENDATION ONLY",
+                    "Deploy Cloudflare WAF Custom Rules or Akamai Bot Manager to challenge or block automated AI scraping traffic.",
+                    "# Cloudflare Custom WAF Expression\n(http.user_agent contains \"GPTBot\" or http.user_agent contains \"ClaudeBot\")\nAction: Managed Challenge (HTTP 403 / JS Challenge)",
+                    "Edge firewalls intercept and block non-compliant scraping bots before their requests reach your origin application."
+                ),
+                (
+                    "4. Interactive CAPTCHA / Bot Verification",
+                    "RECOMMENDATION ONLY",
+                    "Integrate Cloudflare Turnstile or Google reCAPTCHA Enterprise on content and search routes.",
+                    "<!-- Cloudflare Turnstile Widget -->\n<div class=\"cf-turnstile\" data-sitekey=\"your-site-key\"></div>",
+                    "Requires cryptographic proof of human interaction, creating an insurmountable challenge for automated scraping scripts."
+                ),
+                (
+                    "5. Authentication & Content Gating",
+                    "RECOMMENDATION ONLY",
+                    "Enforce JWT, OAuth 2.0, or mutual TLS session tokens on private API endpoints.",
+                    "# Require Authorization Header\nAuthorization: Bearer <valid_jwt_token>\n# Unauthenticated bots receive HTTP 401 Unauthorized",
+                    "Establishes a strict zero-trust boundary. Automated AI crawlers cannot index or extract private subscriber content."
+                ),
+            ]
+            st.markdown("#### 📋 Recommended Production AI Restrictions")
+            for title, pill, desc, code, why in recs:
+                with st.expander(f"{title} — {pill}", expanded=False):
+                    st.markdown(f"**Action:** {desc}")
+                    if code:
+                        st.code(code, language="nginx" if "Nginx" in desc else "text")
+                    st.markdown(f"**Why it helps:** {why}")
+            return
+
+        # 4. Controlled Environment Controls (CineStream)
+        st.success(f"✅ **CONTROLLED ENVIRONMENT CONNECTED:** {env_name} (`{env_url}`). Supported restrictions can be applied, re-crawled, validated, and reverted.")
+
+        st.markdown("##### 🛡️ Restriction Capabilities in Controlled Environment")
+        cap_c1, cap_c2 = st.columns(2)
+        with cap_c1:
+            st.markdown("""
+            - 🟢 **Robots.txt AI Crawl Restriction** — `SUPPORTED_CONTROLLED_FIX` (Actionable)
+            - 🟢 **AI Crawler Rate Limiting (HTTP 429)** — `SUPPORTED_CONTROLLED_FIX` (Actionable)
+            - 🟢 **WAF Challenge Simulation (HTTP 403)** — `SUPPORTED_CONTROLLED_FIX` (Actionable)
+            """)
+        with cap_c2:
+            st.markdown("""
+            - 🟢 **Interactive CAPTCHA Challenge** — `SUPPORTED_CONTROLLED_FIX` (Actionable)
+            - 🟡 **AI Agent Authentication & Gating** — `RECOMMENDATION ONLY` (OAuth/mTLS)
+            """)
+
+        control_options = {
+            "ai_robots_restriction": "Robots.txt AI Crawl Restriction (RFC 9309 Disallow)",
+            "ai_rate_limit": "AI Crawler Rate Limiting (HTTP 429 Simulation)",
+            "ai_waf_challenge": "WAF / Anti-Bot Challenge Simulation (HTTP 403 Challenge)",
+            "ai_captcha": "Interactive CAPTCHA Challenge (Cloudflare Turnstile Simulation)",
+            "ai_authentication": "AI Agent Authentication & Gating (Recommendation Only)",
+        }
+
+        selected_control_id = st.selectbox(
+            "Select AI Restriction Control to Apply / Test:",
+            options=list(control_options.keys()),
+            format_func=lambda cid: control_options[cid],
+            help="Select a control mechanism to enforce on the controlled CineStream test environment."
+        )
+
+        if selected_control_id == "ai_authentication":
+            st.info("ℹ️ **AI Agent Authentication & Gating** is an architectural pattern requiring identity provider integration (OAuth 2.0 / JWT tokens). It is marked **Recommendation Only** in the controlled test environment.")
+            st.code("""# Authentication Middleware Example:
+def verify_ai_agent_token(request):
+    auth_header = request.headers.get("Authorization", "")
+    if not auth_header.startswith("Bearer "):
+        abort(401, description="Authentication required for AI crawler access.")""", language="python")
+            return
+
+        # Multi-Persona Selection for Target and Allowed traffic
+        st.markdown("##### 👥 Multi-Persona Policy Configuration")
+        col_t, col_a = st.columns(2)
+        with col_t:
+            target_personas = st.multiselect(
+                "Target AI Personas to Restrict:",
+                options=["gptbot", "claudebot", "perplexitybot", "bytespider", "ccbot", "google_extended"],
+                default=["gptbot"],
+                format_func=lambda pid: pid.replace("_", " ").title(),
+                help="These AI crawler personas will be targeted by the restriction."
+            )
+        with col_a:
+            allowed_personas = st.multiselect(
+                "Allowed Personas to Preserve Access:",
+                options=["standard_browser", "googlebot"],
+                default=["standard_browser"],
+                format_func=lambda pid: pid.replace("_", " ").title(),
+                help="Validation Engine verifies that legitimate traffic from these personas remains unhindered (no collateral blocking)."
+            )
+
+        if not target_personas:
+            st.warning("Select at least one target persona to restrict.")
+
+        # Action buttons side-by-side
+        btn_col1, btn_col2 = st.columns([1.5, 1.5])
+        with btn_col1:
+            apply_restr_btn = st.button(
+                "⚡ Apply Restriction & Validate",
+                type="primary",
+                use_container_width=True,
+                disabled=not target_personas,
+                help="Enforces restriction on CineStream, executes live re-crawl, and runs canonical ValidationEngine."
+            )
+        with btn_col2:
+            remove_restr_btn = st.button(
+                "🔄 Remove Restriction & Revert",
+                type="secondary",
+                use_container_width=True,
+                disabled=not target_personas,
+                help="Removes active restriction and validates that CineStream returns to normal accessible state."
+            )
+
+        # Apply flow
+        if apply_restr_btn and target_personas:
+            restr_prog = st.empty()
+            with restr_prog.container():
+                st.info(f"🔄 Step 1/3: Running baseline multi-persona crawl on {env_name}...")
+
+            start_server(port=5050)
+
+            raw_before = []
+            for p in target_personas:
+                raw_before.append(run_audit(env_url, persona=p, include_baseline=False, timeout_seconds=12.0))
+            for p in allowed_personas:
+                raw_before.append(run_audit(env_url, persona=p, include_baseline=False, timeout_seconds=12.0))
+            audit_before = dict(raw_before[0])
+            audit_before["raw_results"] = raw_before
+
+            with restr_prog.container():
+                st.info(f"🛡️ Step 2/3: Enforcing '{selected_control_id}' via canonical RestrictionEngine...")
+            restr_res = apply_restriction(
+                restriction_id=selected_control_id,
+                target=env_id,
+                options={
+                    "personas": target_personas,
+                    "allowed_personas": allowed_personas,
+                }
+            )
+
+            with restr_prog.container():
+                st.info(f"📡 Step 3/3: Re-crawling test environment across target and allowed personas...")
+            raw_after = []
+            for p in target_personas:
+                raw_after.append(run_audit(env_url, persona=p, include_baseline=False, timeout_seconds=12.0))
+            for p in allowed_personas:
+                raw_after.append(run_audit(env_url, persona=p, include_baseline=False, timeout_seconds=12.0))
+            audit_after = dict(raw_after[0])
+            audit_after["raw_results"] = raw_after
+
+            cat_map = {
+                "ai_robots_restriction": IssueCategory.AI_ROBOTS_RESTRICTION,
+                "ai_rate_limit": IssueCategory.AI_RATE_LIMIT,
+                "ai_waf_challenge": IssueCategory.AI_WAF_CHALLENGE,
+                "ai_captcha": IssueCategory.AI_CAPTCHA,
+            }
+            target_issue = TargetIssue(
+                category=cat_map.get(selected_control_id, IssueCategory.AI_ROBOTS_RESTRICTION),
+                target_personas=target_personas,
+                allowed_personas=allowed_personas,
+                is_security_restriction=True,
+            )
+            val_result = compare_and_validate(
+                audit_before=audit_before,
+                audit_after=audit_after,
+                fix_status=restr_res.get("status", "APPLIED"),
+                target_issue=target_issue,
+            )
+
+            restr_prog.empty()
+
+            st.session_state["phase3_validation_result"] = val_result
+            st.session_state["phase3_restr_res"] = restr_res
+            st.session_state["phase3_audit_before"] = audit_before
+            st.session_state["phase3_audit_after"] = audit_after
+            st.session_state["phase3_control_id"] = selected_control_id
+            st.session_state["phase3_target_personas"] = target_personas
+            st.session_state["phase3_allowed_personas"] = allowed_personas
+
+        # Remove flow
+        if remove_restr_btn and target_personas:
+            rem_prog = st.empty()
+            with rem_prog.container():
+                st.info(f"🔄 Reverting restriction '{selected_control_id}' on {env_name}...")
+
+            start_server(port=5050)
+            rem_res = remove_restriction(
+                restriction_id=selected_control_id,
+                target=env_id,
+                options={"personas": target_personas}
+            )
+            restored_crawl = run_audit(env_url, persona=target_personas[0], include_baseline=False, timeout_seconds=12.0)
+            rem_prog.empty()
+
+            st.session_state["phase3_validation_result"] = None
+            st.session_state.pop("phase3_audit_after", None)
+            st.success(f"✅ Restriction `{selected_control_id}` removed! Target `{target_personas[0].title()}` restored to {restored_crawl.get('crawl', {}).get('detection', {}).get('inference', {}).get('verdict', 'ACCESSIBLE')}.")
+
+        # Render validation result
+        if st.session_state.get("phase3_validation_result"):
+            v_res = st.session_state["phase3_validation_result"]
+            a_before = st.session_state["phase3_audit_before"]
+            a_after = st.session_state["phase3_audit_after"]
+            r_res = st.session_state["phase3_restr_res"]
+            t_personas = st.session_state.get("phase3_target_personas", ["gptbot"])
+            all_personas = st.session_state.get("phase3_allowed_personas", ["standard_browser"])
+            c_id = st.session_state.get("phase3_control_id", "ai_robots_restriction")
+
+            v_status = v_res.validation_status
+            status_val = v_status.value if hasattr(v_status, "value") else str(v_status)
+
+            b_score = v_res.before_score
+            a_score = v_res.after_score
+            delta = v_res.score_delta
+            delta_str = f"{delta:+d}" if delta != 0 else "0"
+
+            if status_val == "VERIFIED":
+                banner_class = "val-banner-verified"
+                banner_icon = "✓"
+                banner_title = "RESTRICTION ENFORCEMENT VERIFIED"
+                banner_desc = "Canonical Validation Engine confirmed: target AI crawler(s) successfully restricted without collateral impact on allowed traffic."
+            elif status_val == "PARTIALLY_VERIFIED":
+                banner_class = "val-banner-partially"
+                banner_icon = "⚠️"
+                banner_title = "PARTIALLY VERIFIED"
+                banner_desc = "Target restriction partially enforced or collateral impact detected on legitimate allowed traffic."
+            elif status_val == "INCONCLUSIVE":
+                banner_class = "val-banner-inconclusive"
+                banner_icon = "❓"
+                banner_title = "INCONCLUSIVE VALIDATION"
+                banner_desc = "Telemetric evidence is insufficient to conclusively verify restriction enforcement."
+            else:
+                banner_class = "val-banner-failed"
+                banner_icon = "✗"
+                banner_title = "RESTRICTION VALIDATION FAILED"
+                banner_desc = "Target AI crawler remained accessible despite applied restriction."
+
+            st.markdown(f"""
+            <div style="margin-top: 1.5rem;">
+                <div class="{banner_class}">
+                    <span style="font-size: 1.8rem; font-weight: 900;">{banner_icon}</span>
+                    <div>
+                        <div style="font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em;">{banner_title}</div>
+                        <div style="font-size: 0.85rem; opacity: 0.9; margin-top: 0.15rem;">{banner_desc}</div>
                     </div>
                 </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-        # Before vs After Comparison Grid
-        before_status_str = "RESTRICTED" if not a_before.get("robots_txt", {}).get("is_allowed", True) else "ACCESSIBLE"
-        after_status_str = "ACCESSIBLE" if a_after.get("robots_txt", {}).get("is_allowed", True) else "RESTRICTED"
+            p_primary = t_personas[0]
+            before_raw_p = next((x for x in a_before.get("raw_results", []) if x.get("persona") == p_primary), a_before)
+            after_raw_p = next((x for x in a_after.get("raw_results", []) if x.get("persona") == p_primary), a_after)
 
-        persona_name = primary_res.get("persona", "GPTBot").title()
+            b_verd = before_raw_p.get("detection", {}).get("inference", {}).get("verdict", "ACCESSIBLE")
+            a_verd = after_raw_p.get("detection", {}).get("inference", {}).get("verdict", "RESTRICTED")
 
-        st.markdown(f"""
-        <div class="phase2-grid">
-            <div class="state-card">
-                <div class="state-card-header state-before-title">
-                    <span>BEFORE FIX</span>
-                    <span style="font-size: 1.1rem; color: #ffffff;">Score: <strong>{b_score}</strong></span>
+            st.markdown(f"""
+            <div class="phase2-grid" style="margin-top: 1.2rem;">
+                <div class="state-card">
+                    <div class="state-card-header state-before-title">
+                        <span>BASELINE (BEFORE RESTRICTION)</span>
+                        <span style="font-size: 1.1rem; color: #ffffff;">Score: <strong>{b_score}</strong></span>
+                    </div>
+                    <div style="margin-bottom: 0.6rem;">
+                        <span style="font-size: 0.78rem; color: #94a3b8;">Target Bot ({p_primary.title()}):</span><br>
+                        <strong style="color: #10b981; font-size: 1.05rem;">{b_verd}</strong>
+                    </div>
+                    <div>
+                        <span style="font-size: 0.78rem; color: #94a3b8;">Observed Baseline State:</span><br>
+                        <span style="font-size: 0.88rem; color: #e2e8f0;">{str(v_res.issue_before or 'AI crawlers permitted')}</span>
+                    </div>
                 </div>
-                <div style="margin-bottom: 0.6rem;">
-                    <span style="font-size: 0.78rem; color: #94a3b8;">Crawler Status:</span><br>
-                    <strong style="color: {'#ef4444' if before_status_str == 'RESTRICTED' else '#10b981'}; font-size: 1.05rem;">{persona_name}: {before_status_str}</strong>
-                </div>
-                <div>
-                    <span style="font-size: 0.78rem; color: #94a3b8;">Observed State:</span><br>
-                    <span style="font-size: 0.88rem; color: #e2e8f0;">{str(v_res.get('issue_before', 'Restricted access in robots.txt policy'))}</span>
+                <div class="state-card">
+                    <div class="state-card-header state-after-title">
+                        <span>ENFORCED (AFTER RESTRICTION)</span>
+                        <span style="font-size: 1.1rem; color: #ffffff;">Score: <strong>{a_score}</strong> ({delta_str})</span>
+                    </div>
+                    <div style="margin-bottom: 0.6rem;">
+                        <span style="font-size: 0.78rem; color: #94a3b8;">Target Bot ({p_primary.title()}):</span><br>
+                        <strong style="color: #ef4444; font-size: 1.05rem;">{a_verd}</strong>
+                    </div>
+                    <div>
+                        <span style="font-size: 0.78rem; color: #94a3b8;">Observed Enforced State:</span><br>
+                        <span style="font-size: 0.88rem; color: #e2e8f0;">{str(v_res.issue_after or 'Security restriction enforced')}</span>
+                    </div>
                 </div>
             </div>
-            <div class="state-card">
-                <div class="state-card-header state-after-title">
-                    <span>AFTER FIX</span>
-                    <span style="font-size: 1.1rem; color: #ffffff;">Score: <strong>{a_score}</strong> ({delta_str})</span>
+            """, unsafe_allow_html=True)
+
+            st.markdown("##### 👥 Multi-Persona Telemetry Verification")
+            telemetry_rows = []
+            for res_p in a_after.get("raw_results", []):
+                persona_id = res_p.get("persona", "unknown")
+                is_target = persona_id in t_personas
+                role_label = "🎯 Target Restriction" if is_target else "🛡️ Allowed Traffic"
+                p_robots = res_p.get("robots_txt", {}).get("is_allowed")
+                robots_label = "Allowed" if p_robots is True else ("Disallowed" if p_robots is False else "N/A")
+                p_http = res_p.get("http", {}).get("status_code", "N/A")
+                p_verd = res_p.get("detection", {}).get("inference", {}).get("verdict", "UNKNOWN")
+
+                if is_target:
+                    outcome = "✅ Successfully Restricted" if p_verd in {"RESTRICTED", "BLOCKED", "CHALLENGED"} or p_robots is False else "❌ Not Restricted"
+                else:
+                    outcome = "✅ Preserved (No Collateral)" if p_verd == "ACCESSIBLE" and p_robots is not False else "⚠️ Collateral Friction"
+
+                telemetry_rows.append({
+                    "Persona": persona_id.replace("_", " ").title(),
+                    "Role": role_label,
+                    "Robots Policy": robots_label,
+                    "HTTP Status": p_http,
+                    "Observed Verdict": p_verd,
+                    "Validation Outcome": outcome,
+                })
+            st.dataframe(pd.DataFrame(telemetry_rows), use_container_width=True, hide_index=True)
+
+            col_r1, col_r2 = st.columns([1, 1])
+            with col_r1:
+                st.markdown("##### 🔧 Restriction Engine Report")
+                st.markdown(f"- **Control ID**: `{r_res.get('control_id')}`")
+                st.markdown(f"- **Target Environment**: `{r_res.get('target')}`")
+                st.markdown(f"- **Status**: `{r_res.get('status')}`")
+                st.markdown(f"- **Engine Message**: {r_res.get('message')}")
+                if r_res.get("files_changed"):
+                    st.markdown(f"- **Files Modified**: `{', '.join(r_res.get('files_changed'))}`")
+            with col_r2:
+                st.markdown("##### 🔍 Validation Engine Evidence")
+                if v_res.evidence:
+                    for ev in v_res.evidence:
+                        st.markdown(f"- `{ev}`")
+                else:
+                    st.markdown("- `No specific evidence lines recorded.`")
+
+    # =========================================================================
+    # WORKFLOW MODE SELECTOR: PHASE 2 (ACCESSIBILITY FIX) vs PHASE 3 (RESTRICTION CONTROL)
+    # =========================================================================
+    st.markdown("<div id=\"workflow-selection\"></div>", unsafe_allow_html=True)
+    st.markdown("---")
+
+    registry = get_default_registry()
+    active_security_mode = st.session_state.get("audit_security_mode", "AI ACCESSIBILITY")
+    default_workflow_idx = 1 if active_security_mode == "AI RESTRICTION" else 0
+
+    workflow_mode = st.radio(
+        "SELECT WORKFLOW TO EXECUTE:",
+        options=[
+            "🛠️ Phase 2: AI Accessibility Optimization (Audit → Fix → Validate)",
+            "🛡️ Phase 3: AI Crawl Restriction & Security Control (Enforce → Re-crawl → Validate)",
+        ],
+        index=default_workflow_idx,
+        horizontal=True,
+        help="Phase 2 helps open access for AI crawlers. Phase 3 allows website owners to intentionally restrict AI crawlers and validate security enforcement."
+    )
+
+    if workflow_mode.startswith("🛡️ Phase 3"):
+        _render_phase3_restriction_mode(audit_url, results, registry)
+    else:
+        # =========================================================================
+        # PHASE 2: VALIDATE FIX ON TEST ENVIRONMENT
+        # =========================================================================
+        st.markdown("<div id=\"phase2-section\"></div>", unsafe_allow_html=True)
+
+        if not is_controlled_test_environment(audit_url, registry):
+            st.info(
+                "🔒 **CONTROLLED TEST ENVIRONMENT ONLY:** "
+                "Phase 2 automated fix application is available only for registered "
+                "local test environments (e.g. CineStream at `http://127.0.0.1:5050`). "
+                "For external websites, review and copy the generated remediation code in the section above."
+            )
+        else:
+            env_list = registry.list_environments()
+            default_env = env_list[0] if env_list else None
+            test_env_name = default_env.get("description") if default_env else "CineStream Streaming Platform Demo Website"
+            test_env_url = default_env.get("base_url") if default_env else "http://127.0.0.1:5050"
+            test_env_id = default_env.get("id") if default_env else "demo_streaming_site"
+
+            # Extract detected issue & recommended fix from current audit results
+            primary_crawl = primary_res.get("crawl", primary_res)
+            primary_det = primary_crawl.get("detection", {})
+            primary_inf = primary_det.get("inference", {})
+            primary_mech = str(primary_inf.get("mechanism", "NONE")).upper()
+            primary_robots = primary_res.get("robots_txt", {})
+            rem_info = primary_res.get("remediation", {})
+
+            detected_issue_desc = "GPTBot is restricted by robots.txt"
+            recommended_fix_desc = "Allow AI crawler access in robots.txt"
+            chosen_fix_id = "robots_txt"
+
+            if not primary_robots.get("is_allowed", True):
+                detected_issue_desc = f"{primary_res.get('persona', 'GPTBot').title()} is restricted by robots.txt policy"
+                recommended_fix_desc = "Allow AI crawler access in robots.txt"
+                chosen_fix_id = "robots_txt"
+            elif primary_mech in ("CLOUDFLARE_CHALLENGE", "CLOUDFLARE_BLOCK", "CAPTCHA"):
+                detected_issue_desc = f"AI crawler blocked by anti-bot challenge ({primary_mech})"
+                recommended_fix_desc = rem_info.get("recommended_fix", "Configure WAF bypass rule for verified AI bots")
+                chosen_fix_id = "robots_txt"
+            elif (primary_res.get("http", {}).get("response_time_ms") or 0) > 3000:
+                detected_issue_desc = f"Excessive crawler response latency ({primary_res.get('http', {}).get('response_time_ms', 0):.0f}ms)"
+                recommended_fix_desc = "Optimize endpoint latency and reduce simulated server delay"
+                chosen_fix_id = "latency"
+            elif penalties:
+                detected_issue_desc = penalties[0].get("factor", "AI Crawlability Friction Flagged")
+                recommended_fix_desc = rem_info.get("recommended_fix", "Apply recommended configuration fix")
+                chosen_fix_id = "robots_txt"
+
+            st.markdown(f"""
+            <div class="phase2-container">
+                <div class="phase2-header">
+                    <div>
+                        <span class="phase2-badge">Phase 2 Verification Workflow</span>
+                        <div style="font-size: 1.45rem; font-weight: 800; color: #ffffff; margin-top: 0.4rem;">
+                            🛠️ Validate Fix on Test Environment
+                        </div>
+                    </div>
+                    <div style="text-align: right;">
+                        <span style="font-size: 0.8rem; color: #94a3b8;">Target Environment</span><br>
+                        <strong style="color: #38bdf8; font-size: 0.95rem;">{test_env_name}</strong>
+                    </div>
                 </div>
-                <div style="margin-bottom: 0.6rem;">
-                    <span style="font-size: 0.78rem; color: #94a3b8;">Crawler Status:</span><br>
-                    <strong style="color: {'#10b981' if after_status_str == 'ACCESSIBLE' else '#ef4444'}; font-size: 1.05rem;">{persona_name}: {after_status_str}</strong>
+
+                <div class="controlled-env-callout">
+                    <span style="font-size: 1.2rem;">🔒</span>
+                    <div>
+                        <strong>CONTROLLED TEST ENVIRONMENT ONLY:</strong> Arbitrary URL modifications and direct filesystem edits are strictly prohibited by the security allowlist. Fixes are applied deterministically via the Fix Application Engine.
+                    </div>
                 </div>
-                <div>
-                    <span style="font-size: 0.78rem; color: #94a3b8;">Observed State:</span><br>
-                    <span style="font-size: 0.88rem; color: #e2e8f0;">{str(v_res.get('issue_after', 'AI crawler permitted in robots.txt'))}</span>
+
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.2rem;">
+                    <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 1rem;">
+                        <span style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #f87171;">Detected Issue</span>
+                        <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-top: 0.3rem;">{detected_issue_desc}</div>
+                    </div>
+                    <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 1rem;">
+                        <span style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #818cf8;">Recommended Fix</span>
+                        <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-top: 0.3rem;">{recommended_fix_desc}</div>
+                    </div>
                 </div>
             </div>
-        </div>
-        """, unsafe_allow_html=True)
+            """, unsafe_allow_html=True)
 
-        # Fix Engine Application Details & Evidence
-        col_e1, col_e2 = st.columns([1, 1])
-        with col_e1:
-            st.markdown("##### 🔧 Fix Application Engine Report")
-            fix_status_code = f_res.get("status", "applied")
-            st.markdown(f"- **Fix Applied**: `{f_res.get('fix_id')}`")
-            st.markdown(f"- **Target**: `{f_res.get('target')}`")
-            st.markdown(f"- **Execution Status**: `{fix_status_code}`")
-            st.markdown(f"- **Engine Message**: {f_res.get('message')}")
-            if f_res.get("files_changed"):
-                st.markdown(f"- **Files Modified**: `{', '.join(f_res.get('files_changed'))}`")
-        with col_e2:
-            st.markdown("##### 🔍 Validation Engine Evidence")
-            ev_list = v_res.get("evidence", [])
-            if ev_list:
-                for ev in ev_list:
-                    st.markdown(f"- `{ev}`")
+            restricted_bot_ids = []
+            for r in results:
+                r_robots = r.get("robots_txt", {})
+                r_det = r.get("detection", {})
+                r_inf = r_det.get("inference", {})
+                r_verd = str(r_inf.get("verdict", "")).upper()
+                if (
+                    r_robots.get("is_allowed") is False
+                    or r_det.get("is_blocked", False)
+                    or r_verd in {"BLOCKED", "CHALLENGED", "RESTRICTED"}
+                ):
+                    bid = str(r.get("persona", "")).strip().lower()
+                    if bid and bid not in restricted_bot_ids:
+                        restricted_bot_ids.append(bid)
+
+            if not restricted_bot_ids:
+                restricted_bot_ids = [primary_res.get("persona", "gptbot")]
+
+            bot_labels = {
+                bid: bid.replace("_", " ").title()
+                for bid in restricted_bot_ids
+            }
+            selected_bots = st.multiselect(
+                "Select restricted bot(s) to allow:",
+                options=restricted_bot_ids,
+                default=restricted_bot_ids,
+                format_func=lambda bid: bot_labels.get(bid, bid),
+                help="Selected bots will be added to the controlled site's robots.txt Allow rules."
+            )
+            if selected_bots:
+                st.caption("The fix will update: " + ", ".join(bot_labels.get(bid, bid) for bid in selected_bots))
             else:
-                st.markdown("- `Score improved and target access barriers verified resolved.`")
+                st.warning("Select at least one restricted bot before applying a fix.")
+
+            col_btn, col_info = st.columns([2, 3])
+            with col_btn:
+                run_fix_val = st.button(
+                    "⚡ Apply Fix & Validate",
+                    type="primary",
+                    use_container_width=True,
+                    disabled=not selected_bots,
+                    help="Executes backend Fix Application Engine on controlled test environment and validates via Re-crawl."
+                )
+            with col_info:
+                st.caption(f"Applies `{chosen_fix_id}` to `{test_env_id}` ({test_env_url}), performs live re-crawl, and executes Before vs. After validation.")
+
+            if run_fix_val:
+                fix_progress = st.empty()
+                with fix_progress.container():
+                    st.info("🔄 Initiating Phase 2 Fix Application & Validation Flow...")
+
+                try:
+                    start_server(port=5050)
+                except Exception:
+                    pass
+
+                # 1. Baseline Audit (BEFORE) on test environment
+                audit_before = primary_res
+                if not (audit_url and test_env_url in audit_url):
+                    with fix_progress.container():
+                        st.info(f"📡 Step 1/3: Running initial baseline crawl on {test_env_name} ({test_env_url})...")
+                    audit_before = run_audit(
+                        test_env_url,
+                        persona=primary_res.get("persona", "gptbot"),
+                        include_baseline=True,
+                        headless=True,
+                        timeout_seconds=12.0
+                    )
+
+                # 2. Call backend Fix Application Engine
+                with fix_progress.container():
+                    st.info(f"🔧 Step 2/3: Applying '{chosen_fix_id}' via Fix Application Engine...")
+                fix_res = apply_fix(
+                    fix_id=chosen_fix_id,
+                    target=test_env_id,
+                    options={"personas": selected_bots if selected_bots else [primary_res.get("persona", "gptbot")]}
+                )
+
+                # 3. Call backend Re-crawl (AFTER)
+                with fix_progress.container():
+                    st.info(f"📡 Step 3/3: Re-crawling test environment to collect post-fix telemetry...")
+                audit_after = run_audit(
+                    test_env_url,
+                    persona=primary_res.get("persona", "gptbot"),
+                    include_baseline=True,
+                    headless=True,
+                    timeout_seconds=12.0
+                )
+
+                # 4. Call backend Validation Engine
+                val_result = compare_and_validate(
+                    audit_before=audit_before,
+                    audit_after=audit_after,
+                    fix_status=fix_res.get("status", "APPLIED"),
+                    target_issue=chosen_fix_id,
+                )
+
+                fix_progress.empty()
+                st.session_state["phase2_validation_result"] = val_result
+                st.session_state["phase2_audit_before"] = audit_before
+                st.session_state["phase2_audit_after"] = audit_after
+                st.session_state["phase2_fix_res"] = fix_res
+
+            # Render Phase 2 Validation Results if available
+            if "phase2_validation_result" in st.session_state:
+                v_res = st.session_state["phase2_validation_result"]
+                a_before = st.session_state["phase2_audit_before"]
+                a_after = st.session_state["phase2_audit_after"]
+                f_res = st.session_state["phase2_fix_res"]
+
+                v_status = v_res.get("validation_status")
+                status_val = v_status.value if hasattr(v_status, "value") else str(v_status)
+
+                b_score = v_res.get("before_score", 0)
+                a_score = v_res.get("after_score", 0)
+                delta = v_res.get("score_delta", a_score - b_score)
+                delta_str = f"+{delta}" if delta > 0 else str(delta)
+
+                if status_val == "VERIFIED":
+                    banner_class = "val-banner-verified"
+                    banner_icon = "✓"
+                    banner_title = "FIX VERIFIED"
+                elif status_val == "PARTIALLY_VERIFIED":
+                    banner_class = "val-banner-partially"
+                    banner_icon = "⚠️"
+                    banner_title = "PARTIALLY VERIFIED"
+                elif status_val == "INCONCLUSIVE":
+                    banner_class = "val-banner-inconclusive"
+                    banner_icon = "❓"
+                    banner_title = "INCONCLUSIVE RESULT"
+                else:
+                    banner_class = "val-banner-failed"
+                    banner_icon = "✗"
+                    banner_title = "FIX VALIDATION FAILED"
+
+                st.markdown(f"""
+                <div style="margin-top: 1.5rem;">
+                    <div class="{banner_class}">
+                        <span style="font-size: 1.8rem; font-weight: 900;">{banner_icon}</span>
+                        <div>
+                            <div style="font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em;">{banner_title}</div>
+                            <div style="font-size: 0.85rem; opacity: 0.9; margin-top: 0.15rem;">
+                                Backend Validation Engine evaluated Before vs. After crawler behavior on the test environment.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                before_status_str = "RESTRICTED" if not a_before.get("robots_txt", {}).get("is_allowed", True) else "ACCESSIBLE"
+                after_status_str = "ACCESSIBLE" if a_after.get("robots_txt", {}).get("is_allowed", True) else "RESTRICTED"
+
+                persona_name = primary_res.get("persona", "GPTBot").title()
+
+                st.markdown(f"""
+                <div class="phase2-grid">
+                    <div class="state-card">
+                        <div class="state-card-header state-before-title">
+                            <span>BEFORE FIX</span>
+                            <span style="font-size: 1.1rem; color: #ffffff;">Score: <strong>{b_score}</strong></span>
+                        </div>
+                        <div style="margin-bottom: 0.6rem;">
+                            <span style="font-size: 0.78rem; color: #94a3b8;">Crawler Status:</span><br>
+                            <strong style="color: {'#ef4444' if before_status_str == 'RESTRICTED' else '#10b981'}; font-size: 1.05rem;">{persona_name}: {before_status_str}</strong>
+                        </div>
+                        <div>
+                            <span style="font-size: 0.78rem; color: #94a3b8;">Observed State:</span><br>
+                            <span style="font-size: 0.88rem; color: #e2e8f0;">{str(v_res.get('issue_before', 'Restricted access in robots.txt policy'))}</span>
+                        </div>
+                    </div>
+                    <div class="state-card">
+                        <div class="state-card-header state-after-title">
+                            <span>AFTER FIX</span>
+                            <span style="font-size: 1.1rem; color: #ffffff;">Score: <strong>{a_score}</strong> ({delta_str})</span>
+                        </div>
+                        <div style="margin-bottom: 0.6rem;">
+                            <span style="font-size: 0.78rem; color: #94a3b8;">Crawler Status:</span><br>
+                            <strong style="color: {'#10b981' if after_status_str == 'ACCESSIBLE' else '#ef4444'}; font-size: 1.05rem;">{persona_name}: {after_status_str}</strong>
+                        </div>
+                        <div>
+                            <span style="font-size: 0.78rem; color: #94a3b8;">Observed State:</span><br>
+                            <span style="font-size: 0.88rem; color: #e2e8f0;">{str(v_res.get('issue_after', 'AI crawler permitted in robots.txt'))}</span>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                col_e1, col_e2 = st.columns([1, 1])
+                with col_e1:
+                    st.markdown("##### 🔧 Fix Application Engine Report")
+                    fix_status_code = f_res.get("status", "applied")
+                    st.markdown(f"- **Fix Applied**: `{f_res.get('fix_id')}`")
+                    st.markdown(f"- **Target**: `{f_res.get('target')}`")
+                    st.markdown(f"- **Execution Status**: `{fix_status_code}`")
+                    st.markdown(f"- **Engine Message**: {f_res.get('message')}")
+                    if f_res.get("files_changed"):
+                        st.markdown(f"- **Files Modified**: `{', '.join(f_res.get('files_changed'))}`")
+                with col_e2:
+                    st.markdown("##### 🔍 Validation Engine Evidence")
+                    ev_list = v_res.get("evidence", [])
+                    if ev_list:
+                        for ev in ev_list:
+                            st.markdown(f"- `{ev}`")
+                    else:
+                        st.markdown("- `Score improved and target access barriers verified resolved.`")
 
 # -----------------------------------------------------------------------------
 # EXPLAINABILITY & TRUST SECTION ("Evidence-Based, Not Guesswork")
