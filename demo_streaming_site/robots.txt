@@ -3,10 +3,9 @@ User-agent: *
 Allow: /
 
 User-agent: GPTBot
-Disallow: /exclusive/
-Disallow: /originals/
 Crawl-delay: 5
 
+Allow: /
 User-agent: ClaudeBot
 Disallow: /exclusive/
 

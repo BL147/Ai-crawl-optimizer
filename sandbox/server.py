@@ -249,18 +249,20 @@ def get_mode() -> str:
 
 
 _server_thread = None
+_server_port = None
 
 def start_sandbox(port: int = 5050) -> str:
     """Starts sandbox in background daemon thread if not already running."""
-    global _server_thread
+    global _server_thread, _server_port
     if _server_thread is None or not _server_thread.is_alive():
+        _server_port = port
         _server_thread = threading.Thread(
             target=lambda: app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False),
             daemon=True
         )
         _server_thread.start()
         time.sleep(1.0)  # Brief pause to bind port
-    return f"http://127.0.0.1:{port}"
+    return f"http://127.0.0.1:{_server_port}"
 
 
 if __name__ == "__main__":

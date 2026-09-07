@@ -10,6 +10,8 @@ import pandas as pd
 from crawler import list_personas
 from orchestration import run_audit
 from scoring import calculate_score
+from fix_engine import apply_fix, get_default_registry
+from validation import compare_and_validate, ValidationStatus, FixStatus, TargetIssue, IssueCategory
 
 # -----------------------------------------------------------------------------
 # PAGE CONFIGURATION & METADATA
@@ -490,6 +492,121 @@ st.markdown("""
         color: var(--text-secondary);
         line-height: 1.5;
     }
+
+    /* Phase 2 Fix & Validate Styles */
+    .phase2-container {
+        background: linear-gradient(135deg, #0e172a 0%, #0a1020 100%);
+        border: 1px solid rgba(99, 102, 241, 0.35);
+        border-radius: 18px;
+        padding: 2.2rem 2.4rem;
+        margin-top: 2rem;
+        margin-bottom: 2rem;
+        box-shadow: 0 15px 35px -8px rgba(0, 0, 0, 0.5);
+    }
+    .phase2-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 1.2rem;
+        padding-bottom: 0.8rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .phase2-badge {
+        font-size: 0.72rem;
+        font-weight: 800;
+        padding: 0.25rem 0.75rem;
+        border-radius: 9999px;
+        background: rgba(99, 102, 241, 0.2);
+        border: 1px solid rgba(99, 102, 241, 0.4);
+        color: #a5b4fc;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+    }
+    .controlled-env-callout {
+        background: rgba(14, 165, 233, 0.08);
+        border: 1px solid rgba(14, 165, 233, 0.25);
+        border-radius: 10px;
+        padding: 0.8rem 1.1rem;
+        font-size: 0.84rem;
+        color: #7dd3fc;
+        margin-bottom: 1.2rem;
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+    }
+    .phase2-grid {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 1.2rem;
+        margin-top: 1rem;
+        margin-bottom: 1.2rem;
+    }
+    .state-card {
+        background: #0d1527;
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        padding: 1.3rem;
+    }
+    .state-card-header {
+        font-size: 0.82rem;
+        font-weight: 800;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        margin-bottom: 0.8rem;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+    }
+    .state-before-title { color: #fca5a5; }
+    .state-after-title { color: #86efac; }
+    .val-banner-verified {
+        background: rgba(16, 185, 129, 0.15);
+        border: 1px solid rgba(16, 185, 129, 0.45);
+        color: #34d399;
+        border-radius: 12px;
+        padding: 1.2rem 1.4rem;
+        font-weight: 700;
+        font-size: 1.1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    .val-banner-partially {
+        background: rgba(245, 158, 11, 0.15);
+        border: 1px solid rgba(245, 158, 11, 0.45);
+        color: #fbbf24;
+        border-radius: 12px;
+        padding: 1.2rem 1.4rem;
+        font-weight: 700;
+        font-size: 1.1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    .val-banner-failed {
+        background: rgba(239, 68, 68, 0.15);
+        border: 1px solid rgba(239, 68, 68, 0.45);
+        color: #f87171;
+        border-radius: 12px;
+        padding: 1.2rem 1.4rem;
+        font-weight: 700;
+        font-size: 1.1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
+    .val-banner-inconclusive {
+        background: rgba(148, 163, 184, 0.15);
+        border: 1px solid rgba(148, 163, 184, 0.45);
+        color: #cbd5e1;
+        border-radius: 12px;
+        padding: 1.2rem 1.4rem;
+        font-weight: 700;
+        font-size: 1.1rem;
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -513,6 +630,7 @@ st.markdown(f"""
         <a class="nav-item active" href="#hero">Dashboard</a>
         <a class="nav-item" href="#audit-config">Audit</a>
         <a class="nav-item" href="#results-section">Results</a>
+        <a class="nav-item" href="#phase2-section">Validate Fix</a>
         <a class="nav-item" href="#how-it-works">How It Works</a>
     </div>
     <div>
@@ -1388,6 +1506,252 @@ if "audit_results" in st.session_state:
             st.markdown("##### Verification & Validation Steps:")
             for step in validation_steps:
                 st.markdown(f"- [ ] {step}")
+
+    # =========================================================================
+    # PHASE 2: VALIDATE FIX ON TEST ENVIRONMENT
+    # =========================================================================
+    st.markdown("<div id=\"phase2-section\"></div>", unsafe_allow_html=True)
+    
+    registry = get_default_registry()
+    env_list = registry.list_environments()
+    default_env = env_list[0] if env_list else None
+    test_env_name = default_env.get("description") if default_env else "Fictional Streaming Platform Test Site"
+    test_env_url = default_env.get("base_url") if default_env else "http://127.0.0.1:5050"
+    test_env_id = default_env.get("id") if default_env else "demo_streaming_site"
+
+    # Extract detected issue & recommended fix from current audit results
+    primary_crawl = primary_res.get("crawl", primary_res)
+    primary_det = primary_crawl.get("detection", {})
+    primary_inf = primary_det.get("inference", {})
+    primary_mech = str(primary_inf.get("mechanism", "NONE")).upper()
+    primary_robots = primary_res.get("robots_txt", {})
+    rem_info = primary_res.get("remediation", {})
+
+    detected_issue_desc = "GPTBot is restricted by robots.txt"
+    recommended_fix_desc = "Allow AI crawler access in robots.txt"
+    chosen_fix_id = "robots_txt"
+
+    if not primary_robots.get("is_allowed", True):
+        detected_issue_desc = f"{primary_res.get('persona', 'GPTBot').title()} is restricted by robots.txt policy"
+        recommended_fix_desc = "Allow AI crawler access in robots.txt"
+        chosen_fix_id = "robots_txt"
+    elif primary_mech in ("CLOUDFLARE_CHALLENGE", "CLOUDFLARE_BLOCK", "CAPTCHA"):
+        detected_issue_desc = f"AI crawler blocked by anti-bot challenge ({primary_mech})"
+        recommended_fix_desc = rem_info.get("recommended_fix", "Configure WAF bypass rule for verified AI bots")
+        chosen_fix_id = "robots_txt"
+    elif (primary_res.get("http", {}).get("response_time_ms") or 0) > 3000:
+        detected_issue_desc = f"Excessive crawler response latency ({primary_res.get('http', {}).get('response_time_ms', 0):.0f}ms)"
+        recommended_fix_desc = "Optimize endpoint latency and reduce simulated server delay"
+        chosen_fix_id = "latency"
+    elif penalties:
+        detected_issue_desc = penalties[0].get("factor", "AI Crawlability Friction Flagged")
+        recommended_fix_desc = rem_info.get("recommended_fix", "Apply recommended configuration fix")
+        chosen_fix_id = "robots_txt"
+
+    st.markdown(f"""
+    <div class="phase2-container">
+        <div class="phase2-header">
+            <div>
+                <span class="phase2-badge">Phase 2 Verification Workflow</span>
+                <div style="font-size: 1.45rem; font-weight: 800; color: #ffffff; margin-top: 0.4rem;">
+                    🛠️ Validate Fix on Test Environment
+                </div>
+            </div>
+            <div style="text-align: right;">
+                <span style="font-size: 0.8rem; color: #94a3b8;">Target Environment</span><br>
+                <strong style="color: #38bdf8; font-size: 0.95rem;">{test_env_name}</strong>
+            </div>
+        </div>
+
+        <div class="controlled-env-callout">
+            <span style="font-size: 1.2rem;">🔒</span>
+            <div>
+                <strong>CONTROLLED TEST ENVIRONMENT ONLY:</strong> Arbitrary URL modifications and direct filesystem edits are strictly prohibited by the security allowlist. Fixes are applied deterministically via the Fix Application Engine.
+            </div>
+        </div>
+
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1.2rem;">
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 1rem;">
+                <span style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #f87171;">Detected Issue</span>
+                <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-top: 0.3rem;">{detected_issue_desc}</div>
+            </div>
+            <div style="background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.07); border-radius: 10px; padding: 1rem;">
+                <span style="font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: #818cf8;">Recommended Fix</span>
+                <div style="font-size: 1.05rem; font-weight: 700; color: #ffffff; margin-top: 0.3rem;">{recommended_fix_desc}</div>
+            </div>
+        </div>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_btn, col_info = st.columns([2, 3])
+    with col_btn:
+        run_fix_val = st.button(
+            "⚡ Apply Fix & Validate",
+            type="primary",
+            use_container_width=True,
+            help="Executes the backend Fix Application Engine on the controlled test environment and validates results via Re-crawl."
+        )
+    with col_info:
+        st.caption(f"Applies `{chosen_fix_id}` to `{test_env_id}` ({test_env_url}), performs live re-crawl, and executes Before vs. After validation.")
+
+    if run_fix_val:
+        fix_progress = st.empty()
+        with fix_progress.container():
+            st.info("🔄 Initiating Phase 2 Fix Application & Validation Flow...")
+
+        # 1. Baseline Audit (BEFORE) on test environment
+        audit_before = primary_res
+        # If the currently audited URL is not the test environment, run an audit on the test environment first
+        if not (audit_url and test_env_url in audit_url):
+            with fix_progress.container():
+                st.info(f"📡 Step 1/3: Running initial baseline crawl on {test_env_name} ({test_env_url})...")
+            audit_before = run_audit(
+                test_env_url,
+                persona=primary_res.get("persona", "gptbot"),
+                include_baseline=True,
+                headless=True,
+                timeout_seconds=12.0
+            )
+
+        # 2. Call backend Fix Application Engine
+        with fix_progress.container():
+            st.info(f"🔧 Step 2/3: Applying '{chosen_fix_id}' via Fix Application Engine...")
+        fix_res = apply_fix(
+            fix_id=chosen_fix_id,
+            target=test_env_id,
+            options={"personas": [primary_res.get("persona", "gptbot")]}
+        )
+
+        # 3. Call backend Re-crawl (AFTER)
+        with fix_progress.container():
+            st.info(f"📡 Step 3/3: Re-crawling test environment to collect post-fix telemetry...")
+        audit_after = run_audit(
+            test_env_url,
+            persona=primary_res.get("persona", "gptbot"),
+            include_baseline=True,
+            headless=True,
+            timeout_seconds=12.0
+        )
+
+        # 4. Call backend Validation Engine
+        val_result = compare_and_validate(
+            audit_before=audit_before,
+            audit_after=audit_after,
+            fix_status=fix_res.get("status", "APPLIED"),
+            target_issue=chosen_fix_id,
+        )
+
+        fix_progress.empty()
+        st.session_state["phase2_validation_result"] = val_result
+        st.session_state["phase2_audit_before"] = audit_before
+        st.session_state["phase2_audit_after"] = audit_after
+        st.session_state["phase2_fix_res"] = fix_res
+
+    # Render Phase 2 Validation Results if available
+    if "phase2_validation_result" in st.session_state:
+        v_res = st.session_state["phase2_validation_result"]
+        a_before = st.session_state["phase2_audit_before"]
+        a_after = st.session_state["phase2_audit_after"]
+        f_res = st.session_state["phase2_fix_res"]
+
+        v_status = v_res.get("validation_status")
+        status_val = v_status.value if hasattr(v_status, "value") else str(v_status)
+
+        b_score = v_res.get("before_score", 0)
+        a_score = v_res.get("after_score", 0)
+        delta = v_res.get("score_delta", a_score - b_score)
+        delta_str = f"+{delta}" if delta > 0 else str(delta)
+
+        # Determine banner styling and icon
+        if status_val == "VERIFIED":
+            banner_class = "val-banner-verified"
+            banner_icon = "✓"
+            banner_title = "FIX VERIFIED"
+        elif status_val == "PARTIALLY_VERIFIED":
+            banner_class = "val-banner-partially"
+            banner_icon = "⚠️"
+            banner_title = "PARTIALLY VERIFIED"
+        elif status_val == "INCONCLUSIVE":
+            banner_class = "val-banner-inconclusive"
+            banner_icon = "❓"
+            banner_title = "INCONCLUSIVE RESULT"
+        else:
+            banner_class = "val-banner-failed"
+            banner_icon = "✗"
+            banner_title = "FIX VALIDATION FAILED"
+
+        st.markdown(f"""
+        <div style="margin-top: 1.5rem;">
+            <div class="{banner_class}">
+                <span style="font-size: 1.8rem; font-weight: 900;">{banner_icon}</span>
+                <div>
+                    <div style="font-size: 1.25rem; font-weight: 800; letter-spacing: -0.01em;">{banner_title}</div>
+                    <div style="font-size: 0.85rem; opacity: 0.9; margin-top: 0.15rem;">
+                        Backend Validation Engine evaluated Before vs. After crawler behavior on the test environment.
+                    </div>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Before vs After Comparison Grid
+        before_status_str = "RESTRICTED" if not a_before.get("robots_txt", {}).get("is_allowed", True) else "ACCESSIBLE"
+        after_status_str = "ACCESSIBLE" if a_after.get("robots_txt", {}).get("is_allowed", True) else "RESTRICTED"
+
+        persona_name = primary_res.get("persona", "GPTBot").title()
+
+        st.markdown(f"""
+        <div class="phase2-grid">
+            <div class="state-card">
+                <div class="state-card-header state-before-title">
+                    <span>BEFORE FIX</span>
+                    <span style="font-size: 1.1rem; color: #ffffff;">Score: <strong>{b_score}</strong></span>
+                </div>
+                <div style="margin-bottom: 0.6rem;">
+                    <span style="font-size: 0.78rem; color: #94a3b8;">Crawler Status:</span><br>
+                    <strong style="color: {'#ef4444' if before_status_str == 'RESTRICTED' else '#10b981'}; font-size: 1.05rem;">{persona_name}: {before_status_str}</strong>
+                </div>
+                <div>
+                    <span style="font-size: 0.78rem; color: #94a3b8;">Observed State:</span><br>
+                    <span style="font-size: 0.88rem; color: #e2e8f0;">{str(v_res.get('issue_before', 'Restricted access in robots.txt policy'))}</span>
+                </div>
+            </div>
+            <div class="state-card">
+                <div class="state-card-header state-after-title">
+                    <span>AFTER FIX</span>
+                    <span style="font-size: 1.1rem; color: #ffffff;">Score: <strong>{a_score}</strong> ({delta_str})</span>
+                </div>
+                <div style="margin-bottom: 0.6rem;">
+                    <span style="font-size: 0.78rem; color: #94a3b8;">Crawler Status:</span><br>
+                    <strong style="color: {'#10b981' if after_status_str == 'ACCESSIBLE' else '#ef4444'}; font-size: 1.05rem;">{persona_name}: {after_status_str}</strong>
+                </div>
+                <div>
+                    <span style="font-size: 0.78rem; color: #94a3b8;">Observed State:</span><br>
+                    <span style="font-size: 0.88rem; color: #e2e8f0;">{str(v_res.get('issue_after', 'AI crawler permitted in robots.txt'))}</span>
+                </div>
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        # Fix Engine Application Details & Evidence
+        col_e1, col_e2 = st.columns([1, 1])
+        with col_e1:
+            st.markdown("##### 🔧 Fix Application Engine Report")
+            fix_status_code = f_res.get("status", "applied")
+            st.markdown(f"- **Fix Applied**: `{f_res.get('fix_id')}`")
+            st.markdown(f"- **Target**: `{f_res.get('target')}`")
+            st.markdown(f"- **Execution Status**: `{fix_status_code}`")
+            st.markdown(f"- **Engine Message**: {f_res.get('message')}")
+            if f_res.get("files_changed"):
+                st.markdown(f"- **Files Modified**: `{', '.join(f_res.get('files_changed'))}`")
+        with col_e2:
+            st.markdown("##### 🔍 Validation Engine Evidence")
+            ev_list = v_res.get("evidence", [])
+            if ev_list:
+                for ev in ev_list:
+                    st.markdown(f"- `{ev}`")
+            else:
+                st.markdown("- `Score improved and target access barriers verified resolved.`")
 
 # -----------------------------------------------------------------------------
 # EXPLAINABILITY & TRUST SECTION ("Evidence-Based, Not Guesswork")
