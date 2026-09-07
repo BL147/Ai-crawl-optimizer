@@ -8,6 +8,8 @@ HACKATHON PRESENTATION CONTROLS (Change these settings to toggle demo behavior)
 """
 
 import os
+import threading
+import time
 from flask import Flask, render_template, request, Response, jsonify
 
 # ----------------------------------------------------------------------------
@@ -79,37 +81,17 @@ def home():
     return render_template("index.html", is_blocked=BLOCK_AI_BOTS, port=PORT)
 
 
+ROBOTS_TXT_PATH = os.path.join(os.path.dirname(__file__), "robots.txt")
+
+
 @app.route("/robots.txt")
 def robots_txt():
-    """Serve robots.txt policy with configurable AI crawler directives."""
-    if BLOCK_IN_ROBOTS_TXT:
-        content = """# CineStream Robots Policy - AI Crawl Optimizer Demo
-User-agent: *
-Allow: /
-
-# Directives blocking generative search bots
-User-agent: GPTBot
-Disallow: /
-Crawl-delay: 5
-
-User-agent: ClaudeBot
-Disallow: /
-
-User-agent: PerplexityBot
-Disallow: /
-
-User-agent: Google-Extended
-Disallow: /
-
-Sitemap: http://localhost:""" + str(PORT) + """/sitemap.xml
-"""
+    """Serve robots.txt directly from disk as the single source of truth."""
+    if os.path.exists(ROBOTS_TXT_PATH):
+        with open(ROBOTS_TXT_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
     else:
-        content = """# CineStream Robots Policy - Fully Accessible
-User-agent: *
-Allow: /
-
-Sitemap: http://localhost:""" + str(PORT) + """/sitemap.xml
-"""
+        content = "User-agent: *\nAllow: /\n"
     return Response(content, mimetype="text/plain")
 
 
@@ -153,6 +135,30 @@ def toggle():
         "BLOCK_IN_ROBOTS_TXT": BLOCK_IN_ROBOTS_TXT,
         "instructions": "Visit http://localhost:" + str(PORT) + " to see the updated status."
     })
+
+
+_server_thread = None
+
+
+def _is_port_in_use(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def start_server(port: int = PORT) -> str:
+    """Starts demo server in background daemon thread if not already running."""
+    global _server_thread
+    if _is_port_in_use(port):
+        return f"http://127.0.0.1:{port}"
+    if _server_thread is None or not _server_thread.is_alive():
+        _server_thread = threading.Thread(
+            target=lambda: app.run(host="127.0.0.1", port=port, debug=False, use_reloader=False),
+            daemon=True,
+        )
+        _server_thread.start()
+        time.sleep(0.8)
+    return f"http://127.0.0.1:{port}"
 
 
 if __name__ == "__main__":

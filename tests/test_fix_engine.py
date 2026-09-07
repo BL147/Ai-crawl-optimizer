@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from crawler.robots import RobotsParser
+from demo_streaming_site.app import start_server
 from fix_engine import (
     FixApplicationEngine,
     FixResult,
@@ -15,6 +16,9 @@ from fix_engine import (
     TestEnvironmentRegistry,
     apply_fix,
 )
+from orchestrator import run_audit
+import requests
+from validation import compare_and_validate, ValidationStatus
 
 
 @pytest.fixture
@@ -291,3 +295,77 @@ def test_runtime_symlink_escape_rejected(tmp_path: Path):
     # Verify outside file was NOT modified
     assert "Disallow: /" in outside_file.read_text(encoding="utf-8")
 
+
+def test_cinestream_http_robots_fix_and_validation_sequence():
+    """
+    Integration regression test proving that the served HTTP robots.txt is the same
+    policy being modified by the Fix Engine, and that the validation engine confirms
+    the transition from RESTRICTED to ACCESSIBLE.
+
+    Verifies the mandated 10-step sequence:
+    1. Start the controlled CineStream server.
+    2. GET /robots.txt.
+    3. Confirm GPTBot is initially restricted.
+    4. Call fix_engine.apply_fix("robots_txt", "demo_streaming_site", ...).
+    5. GET /robots.txt again.
+    6. Confirm GPTBot is now allowed.
+    7. Run the crawler.
+    8. Confirm GPTBot becomes ACCESSIBLE.
+    9. Run compare_and_validate().
+    10. Confirm validation_status == VERIFIED.
+    """
+    demo_robots_path = Path("demo_streaming_site/robots.txt")
+    initial_content = demo_robots_path.read_text(encoding="utf-8")
+
+    try:
+        # Step 1: Start the controlled CineStream server
+        base_url = start_server(port=5050)
+
+        # Step 2: GET /robots.txt
+        resp_before = requests.get(f"{base_url}/robots.txt", timeout=5)
+        assert resp_before.status_code == 200
+        robots_text_before = resp_before.text
+
+        # Step 3: Confirm GPTBot is initially restricted in served robots.txt and initial crawl
+        assert "User-agent: GPTBot" in robots_text_before
+        assert "Disallow: /" in robots_text_before
+        audit_before = run_audit(base_url, persona="gptbot")
+        assert audit_before["robots_txt"]["is_allowed"] is False
+        assert audit_before["crawl"]["detection"]["inference"]["verdict"] == "RESTRICTED"
+
+        # Step 4: Call fix_engine.apply_fix("robots_txt", "demo_streaming_site", ...)
+        fix_res = apply_fix(
+            fix_id="robots_txt",
+            target="demo_streaming_site",
+            options={"personas": ["gptbot"]},
+        )
+        assert fix_res["status"] == FixStatus.APPLIED.value
+
+        # Step 5: GET /robots.txt again
+        resp_after = requests.get(f"{base_url}/robots.txt", timeout=5)
+        assert resp_after.status_code == 200
+        robots_text_after = resp_after.text
+
+        # Step 6: Confirm GPTBot is now allowed in served HTTP robots.txt
+        assert "User-agent: GPTBot\nDisallow: /" not in robots_text_after
+        # ClaudeBot and PerplexityBot disallows remain intact
+        assert "User-agent: ClaudeBot" in robots_text_after
+        assert "User-agent: PerplexityBot" in robots_text_after
+
+        # Step 7: Run the crawler
+        audit_after = run_audit(base_url, persona="gptbot")
+
+        # Step 8: Confirm GPTBot becomes ACCESSIBLE
+        assert audit_after["robots_txt"]["is_allowed"] is True
+        assert audit_after["crawl"]["detection"]["inference"]["verdict"] == "ACCESSIBLE"
+
+        # Step 9: Run compare_and_validate()
+        val_report = compare_and_validate(audit_before, audit_after)
+
+        # Step 10: Confirm validation_status == VERIFIED
+        assert val_report.validation_status == ValidationStatus.VERIFIED
+        assert val_report.before_score < val_report.after_score
+
+    finally:
+        # Restore demo_streaming_site/robots.txt to its initial restricted state
+        demo_robots_path.write_text(initial_content, encoding="utf-8")
