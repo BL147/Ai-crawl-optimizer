@@ -32,6 +32,7 @@ class FixStatus(str, Enum):
 class IssueCategory(str, Enum):
     """Categories of crawlability issues."""
     ROBOTS_TXT = "ROBOTS_TXT"
+    X_ROBOTS_TAG = "X_ROBOTS_TAG"
     WAF_CHALLENGE = "WAF_CHALLENGE"
     CAPTCHA = "CAPTCHA"
     HTTP_STATUS = "HTTP_STATUS"

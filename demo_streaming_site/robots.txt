@@ -1,12 +1,12 @@
 # CineStream Platform Robots Policy
-User-agent: *
-Allow: /
 
 User-agent: GPTBot
-Crawl-delay: 5
-
 Allow: /
 User-agent: ClaudeBot
-Disallow: /exclusive/
-
 Sitemap: http://localhost:5050/sitemap.xml
+Allow: /
+
+# AI Crawlers explicitly allowed by AI Crawl Optimizer
+User-agent: perplexitybot
+User-agent: google_extended
+Allow: /

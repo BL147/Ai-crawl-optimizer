@@ -3,6 +3,7 @@
 from typing import Any, Callable, Dict, List, Optional
 
 from fix_engine.latency_fix import apply_latency_fix
+from fix_engine.header_fix import apply_x_robots_tag_fix
 from fix_engine.models import FixResult, FixStatus, TestEnvironment
 from fix_engine.registry import TestEnvironmentRegistry, get_default_registry
 from fix_engine.robots_fix import apply_robots_fix
@@ -28,11 +29,14 @@ class FixApplicationEngine:
             "performance": apply_latency_fix,
             "reduce_latency": apply_latency_fix,
             "simulated_latency": apply_latency_fix,
+            "x_robots_tag": apply_x_robots_tag_fix,
+            "x-robots-tag": apply_x_robots_tag_fix,
+            "headers": apply_x_robots_tag_fix,
         }
 
     def get_supported_fixes(self) -> List[str]:
         """Return list of canonical supported fix identifiers."""
-        return ["robots_txt", "latency"]
+        return ["robots_txt", "latency", "x_robots_tag"]
 
     def apply_fix(
         self,

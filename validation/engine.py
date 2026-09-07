@@ -102,6 +102,10 @@ class FixValidationEngine:
             return cls._validate_robots_fix(
                 audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
             )
+        elif category == IssueCategory.X_ROBOTS_TAG:
+            return cls._validate_x_robots_tag_fix(
+                audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+            )
         elif category in (IssueCategory.WAF_CHALLENGE, IssueCategory.CAPTCHA):
             return cls._validate_waf_fix(
                 audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
@@ -770,7 +774,9 @@ class FixValidationEngine:
 
         if isinstance(target_issue, str):
             s = target_issue.upper()
-            if "ROBOT" in s:
+            if "X_ROBOTS" in s or "X-ROBOTS" in s:
+                return TargetIssue(category=IssueCategory.X_ROBOTS_TAG, description=target_issue)
+            elif "ROBOT" in s:
                 return TargetIssue(category=IssueCategory.ROBOTS_TXT, description=target_issue)
             elif "WAF" in s or "CLOUDFLARE" in s or "CHALLENGE" in s:
                 return TargetIssue(category=IssueCategory.WAF_CHALLENGE, description=target_issue)
@@ -824,6 +830,43 @@ class FixValidationEngine:
             return TargetIssue(category=IssueCategory.LATENCY, description=f"High latency ({latency:.0f}ms)")
 
         return TargetIssue(category=IssueCategory.OTHER, description="General accessibility validation")
+
+    @classmethod
+    def _validate_x_robots_tag_fix(
+        cls,
+        audit_before: Dict[str, Any],
+        audit_after: Dict[str, Any],
+        target: TargetIssue,
+        before_score: int,
+        after_score: int,
+        score_delta: int,
+        fix_status: str,
+        timestamp: str,
+    ) -> ValidationResult:
+        before_http = (audit_before.get("http") or {}).get("x_robots_tag")
+        after_http = (audit_after.get("http") or {}).get("x_robots_tag")
+        resolved = bool(before_http) and not after_http
+        status = ValidationStatus.VERIFIED if resolved else ValidationStatus.FAILED
+        evidence = [
+            f"Before X-Robots-Tag: {before_http or 'absent'}",
+            f"After X-Robots-Tag: {after_http or 'absent'}",
+        ]
+        evidence.append(
+            "Restrictive X-Robots-Tag was removed from the fresh response."
+            if resolved
+            else "Restrictive X-Robots-Tag remains present or was not observed before the fix."
+        )
+        return ValidationResult(
+            before_score=before_score,
+            after_score=after_score,
+            score_delta=score_delta,
+            issue_before={"x_robots_tag": before_http},
+            issue_after={"x_robots_tag": after_http},
+            fix_status=fix_status,
+            validation_status=status,
+            evidence=evidence,
+            timestamp=timestamp,
+        )
 
     @classmethod
     def _as_dict(cls, obj: Any) -> Dict[str, Any]:

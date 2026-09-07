@@ -10,7 +10,7 @@ import pandas as pd
 from crawler import list_personas
 from orchestration import run_audit
 from scoring import calculate_score
-from fix_engine import apply_fix, get_default_registry
+from fix_engine import apply_fix, get_default_registry, is_controlled_test_environment
 from validation import compare_and_validate, ValidationStatus, FixStatus, TargetIssue, IssueCategory
 
 # -----------------------------------------------------------------------------
@@ -1513,6 +1513,13 @@ if "audit_results" in st.session_state:
     st.markdown("<div id=\"phase2-section\"></div>", unsafe_allow_html=True)
     
     registry = get_default_registry()
+    if not is_controlled_test_environment(audit_url, registry):
+        st.info(
+            "Phase 2 fix application is available only for the registered local "
+            "controlled test environment."
+        )
+        st.stop()
+
     env_list = registry.list_environments()
     default_env = env_list[0] if env_list else None
     test_env_name = default_env.get("description") if default_env else "Fictional Streaming Platform Test Site"
@@ -1535,6 +1542,13 @@ if "audit_results" in st.session_state:
         detected_issue_desc = f"{primary_res.get('persona', 'GPTBot').title()} is restricted by robots.txt policy"
         recommended_fix_desc = "Allow AI crawler access in robots.txt"
         chosen_fix_id = "robots_txt"
+    elif primary_res.get("http", {}).get("x_robots_tag"):
+        detected_issue_desc = "AI crawler response includes a restrictive X-Robots-Tag header"
+        recommended_fix_desc = rem_info.get(
+            "recommended_fix",
+            "Remove or relax the X-Robots-Tag noindex directive for AI crawlers",
+        )
+        chosen_fix_id = "x_robots_tag"
     elif primary_mech in ("CLOUDFLARE_CHALLENGE", "CLOUDFLARE_BLOCK", "CAPTCHA"):
         detected_issue_desc = f"AI crawler blocked by anti-bot challenge ({primary_mech})"
         recommended_fix_desc = rem_info.get("recommended_fix", "Configure WAF bypass rule for verified AI bots")
@@ -1583,12 +1597,47 @@ if "audit_results" in st.session_state:
     </div>
     """, unsafe_allow_html=True)
 
+    restricted_bot_ids = []
+    for result in results:
+        result_robots = result.get("robots_txt", {})
+        result_detection = result.get("detection", {})
+        result_inference = result_detection.get("inference", {})
+        result_verdict = str(result_inference.get("verdict", "")).upper()
+        if (
+            result_robots.get("is_allowed") is False
+            or result_detection.get("is_blocked", False)
+            or result_verdict in {"BLOCKED", "CHALLENGED"}
+        ):
+            bot_id = str(result.get("persona", "")).strip().lower()
+            if bot_id and bot_id not in restricted_bot_ids:
+                restricted_bot_ids.append(bot_id)
+
+    bot_labels = {
+        bot_id: bot_id.replace("_", " ").title()
+        for bot_id in restricted_bot_ids
+    }
+    selected_bots = st.multiselect(
+        "Select restricted bots to allow",
+        options=restricted_bot_ids,
+        default=restricted_bot_ids,
+        format_func=lambda bot_id: bot_labels[bot_id],
+        help="Only selected bots will be added to the controlled site's robots.txt Allow rules.",
+    )
+    if selected_bots:
+        st.caption(
+            "The fix will update: "
+            + ", ".join(bot_labels[bot_id] for bot_id in selected_bots)
+        )
+    else:
+        st.warning("Select at least one restricted bot before applying a fix.")
+
     col_btn, col_info = st.columns([2, 3])
     with col_btn:
         run_fix_val = st.button(
             "⚡ Apply Fix & Validate",
             type="primary",
             use_container_width=True,
+            disabled=not selected_bots,
             help="Executes the backend Fix Application Engine on the controlled test environment and validates results via Re-crawl."
         )
     with col_info:
@@ -1619,7 +1668,7 @@ if "audit_results" in st.session_state:
         fix_res = apply_fix(
             fix_id=chosen_fix_id,
             target=test_env_id,
-            options={"personas": [primary_res.get("persona", "gptbot")]}
+            options={"personas": selected_bots}
         )
 
         # 3. Call backend Re-crawl (AFTER)

@@ -97,6 +97,15 @@ class TestEnvironmentRegistry:
         ]
 
 
+def is_controlled_test_environment(
+    target: str,
+    registry: Optional[TestEnvironmentRegistry] = None,
+) -> bool:
+    """Return whether a target resolves to an explicitly registered test site."""
+    active_registry = registry if registry is not None else get_default_registry()
+    return active_registry.is_allowed(target)
+
+
 _GLOBAL_REGISTRY: Optional[TestEnvironmentRegistry] = None
 
 

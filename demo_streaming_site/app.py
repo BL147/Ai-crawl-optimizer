@@ -15,6 +15,7 @@ from flask import Flask, render_template, request, Response, jsonify
 # ----------------------------------------------------------------------------
 BLOCK_AI_BOTS = False        # LINE 16: Change to True to block AI crawlers with HTTP 403
 BLOCK_IN_ROBOTS_TXT = True  # LINE 17: Change to True to add AI Disallow rules to robots.txt
+BLOCK_WITH_X_ROBOTS_TAG = True  # LINE 18: Add an indexing restriction response header
 PORT = 5050                  # Port 5050 avoids macOS AirPlay Receiver port 5000 conflict
 # ----------------------------------------------------------------------------
 
@@ -76,40 +77,21 @@ def home():
         return Response(html_403, status=403, mimetype="text/html")
 
     # Normal access (browser or allowed AI bot)
-    return render_template("index.html", is_blocked=BLOCK_AI_BOTS, port=PORT)
+    response = Response(
+        render_template("index.html", is_blocked=BLOCK_AI_BOTS, port=PORT),
+        mimetype="text/html",
+    )
+    if BLOCK_WITH_X_ROBOTS_TAG and bot_detected:
+        response.headers["X-Robots-Tag"] = "noindex, nofollow"
+    return response
 
 
 @app.route("/robots.txt")
 def robots_txt():
-    """Serve robots.txt policy with configurable AI crawler directives."""
-    if BLOCK_IN_ROBOTS_TXT:
-        content = """# CineStream Robots Policy - AI Crawl Optimizer Demo
-User-agent: *
-Allow: /
-
-# Directives blocking generative search bots
-User-agent: GPTBot
-Disallow: /
-Crawl-delay: 5
-
-User-agent: ClaudeBot
-Disallow: /
-
-User-agent: PerplexityBot
-Disallow: /
-
-User-agent: Google-Extended
-Disallow: /
-
-Sitemap: http://localhost:""" + str(PORT) + """/sitemap.xml
-"""
-    else:
-        content = """# CineStream Robots Policy - Fully Accessible
-User-agent: *
-Allow: /
-
-Sitemap: http://localhost:""" + str(PORT) + """/sitemap.xml
-"""
+    """Serve the controlled environment's editable robots.txt policy."""
+    robots_path = os.path.join(os.path.dirname(__file__), "robots.txt")
+    with open(robots_path, "r", encoding="utf-8") as robots_file:
+        content = robots_file.read()
     return Response(content, mimetype="text/plain")
 
 
@@ -120,6 +102,7 @@ def status():
     return jsonify({
         "block_ai_bots": BLOCK_AI_BOTS,
         "block_in_robots_txt": BLOCK_IN_ROBOTS_TXT,
+        "block_with_x_robots_tag": BLOCK_WITH_X_ROBOTS_TAG,
         "port": PORT,
         "request_user_agent": ua,
         "is_ai_crawler": is_ai_crawler(ua),
@@ -135,7 +118,7 @@ def toggle():
       - /toggle?block=false
       - /toggle (toggles current state)
     """
-    global BLOCK_AI_BOTS, BLOCK_IN_ROBOTS_TXT
+    global BLOCK_AI_BOTS, BLOCK_IN_ROBOTS_TXT, BLOCK_WITH_X_ROBOTS_TAG
     block_param = request.args.get("block")
     robots_param = request.args.get("robots")
 
@@ -146,11 +129,15 @@ def toggle():
 
     if robots_param is not None:
         BLOCK_IN_ROBOTS_TXT = robots_param.lower() in ("true", "1", "yes")
+    x_robots_param = request.args.get("x_robots")
+    if x_robots_param is not None:
+        BLOCK_WITH_X_ROBOTS_TAG = x_robots_param.lower() in ("true", "1", "yes")
 
     return jsonify({
         "message": f"BLOCK_AI_BOTS is now {BLOCK_AI_BOTS}",
         "BLOCK_AI_BOTS": BLOCK_AI_BOTS,
         "BLOCK_IN_ROBOTS_TXT": BLOCK_IN_ROBOTS_TXT,
+        "BLOCK_WITH_X_ROBOTS_TAG": BLOCK_WITH_X_ROBOTS_TAG,
         "instructions": "Visit http://localhost:" + str(PORT) + " to see the updated status."
     })
 

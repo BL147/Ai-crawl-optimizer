@@ -5,6 +5,7 @@ from fix_engine.models import FixResult, FixStatus, TestEnvironment
 from fix_engine.registry import (
     TestEnvironmentRegistry,
     get_default_registry,
+    is_controlled_test_environment,
     reset_default_registry,
 )
 
@@ -16,5 +17,6 @@ __all__ = [
     "TestEnvironmentRegistry",
     "apply_fix",
     "get_default_registry",
+    "is_controlled_test_environment",
     "reset_default_registry",
 ]
