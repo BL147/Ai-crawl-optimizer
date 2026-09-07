@@ -7,6 +7,7 @@ HACKATHON PRESENTATION CONTROLS (Change these settings to toggle demo behavior)
 ==============================================================================
 """
 
+import json
 import os
 import threading
 import time
@@ -36,6 +37,32 @@ AI_BOT_PATTERNS = [
     "diffbot",
 ]
 
+RESTRICTIONS_PATH = os.path.join(os.path.dirname(__file__), "restrictions.json")
+
+
+def get_active_restrictions() -> dict:
+    """Read simulated restriction controls from disk on each request."""
+    if os.path.exists(RESTRICTIONS_PATH):
+        try:
+            with open(RESTRICTIONS_PATH, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+
+def is_bot_in_restriction(restriction_name: str, user_agent: str) -> bool:
+    """Check if the user_agent is specifically targeted by the given active restriction."""
+    if not user_agent:
+        return False
+    restrictions = get_active_restrictions()
+    cfg = restrictions.get(restriction_name, {})
+    if not cfg.get("enabled", False):
+        return False
+    target_bots = cfg.get("personas", [])
+    ua_lower = user_agent.lower()
+    return any(b.lower() in ua_lower for b in target_bots)
+
 
 def is_ai_crawler(user_agent: str) -> bool:
     """Check if the incoming request User-Agent matches known AI crawler signatures."""
@@ -47,11 +74,61 @@ def is_ai_crawler(user_agent: str) -> bool:
 
 @app.route("/")
 def home():
-    """Main landing page. Handles both regular browsers and simulated bot blocks."""
+    """Main landing page. Handles regular browsers, AI restrictions, and simulated bot blocks."""
     user_agent = request.headers.get("User-Agent", "")
+
+    # 1. AI Rate Limiting Simulation (HTTP 429)
+    if is_bot_in_restriction("rate_limit", user_agent):
+        resp_headers = {
+            "Retry-After": "60",
+            "Content-Type": "text/plain",
+        }
+        return Response("Too Many Requests: rate limit exceeded for bot crawler.", status=429, headers=resp_headers)
+
+    # 2. WAF / Turnstile Challenge Simulation
+    if is_bot_in_restriction("waf_challenge", user_agent):
+        html_cf = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Just a moment...</title>
+    <style>body { background: #000; color: #fff; font-family: sans-serif; }</style>
+</head>
+<body>
+    <div id="challenge-stage">
+        <div class="cf-turnstile"></div>
+        <form id="challenge-form"></form>
+    </div>
+    <p>Checking your browser before accessing...</p>
+</body>
+</html>"""
+        resp_headers = {
+            "Server": "cloudflare",
+            "cf-ray": "8e123456789abcde-IAD",
+            "Content-Type": "text/html",
+        }
+        return Response(html_cf, status=403, headers=resp_headers)
+
+    # 3. Interactive CAPTCHA Simulation
+    if is_bot_in_restriction("captcha", user_agent):
+        html_captcha = """<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Security Verification</title>
+</head>
+<body>
+    <h1>Security Check</h1>
+    <p>Please solve the CAPTCHA to continue.</p>
+    <div class="g-recaptcha"></div>
+    <iframe src="https://www.google.com/recaptcha/api2/anchor"></iframe>
+</body>
+</html>"""
+        return Response(html_captcha, status=403, mimetype="text/html")
+
     bot_detected = is_ai_crawler(user_agent)
 
-    # If blocking is active AND the request is from an AI crawler persona
+    # 4. Existing 403 Bot Block scenario
     if BLOCK_AI_BOTS and bot_detected:
         html_403 = """<!DOCTYPE html>
 <html lang="en">

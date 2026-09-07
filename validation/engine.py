@@ -114,6 +114,24 @@ class FixValidationEngine:
             return cls._validate_http_status_fix(
                 audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
             )
+        elif category == IssueCategory.AI_RESTRICTION:
+            desc = str(resolved_target.description or "").upper()
+            if "ROBOT" in desc:
+                return cls._validate_robots_fix(
+                    audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+                )
+            elif "WAF" in desc or "CHALLENGE" in desc or "CAPTCHA" in desc:
+                return cls._validate_waf_fix(
+                    audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+                )
+            elif "RATE" in desc or "429" in desc:
+                return cls._validate_http_status_fix(
+                    audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+                )
+            else:
+                return cls._validate_general_fix(
+                    audit_before, audit_after, resolved_target, before_score, after_score, score_delta, fix_status, now_ts
+                )
         else:
             # General / Composite validation
             return cls._validate_general_fix(
@@ -246,6 +264,46 @@ class FixValidationEngine:
 
         evidence: List[str] = []
 
+        # Check if this validation is for an AI restriction
+        is_restriction = (
+            target.expected_resolved_state in ("RESTRICTED", "DISALLOWED")
+            or target.category == IssueCategory.AI_RESTRICTION
+            or "RESTRICT" in str(target.description or "").upper()
+        )
+
+        if is_restriction:
+            if not after_allowed:
+                evidence.append(f"Before: AI crawler was permitted (rule: {before_rule or 'None'}).")
+                evidence.append(f"After: AI crawler is successfully RESTRICTED by robots.txt (rule: {after_rule or 'Disallow: /'}).")
+                evidence.append(f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}).")
+                evidence.append("Robots.txt AI restriction confirmed active per RFC 9309 directive evaluation.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.VERIFIED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+            else:
+                evidence.append(f"Before: AI crawler was permitted (rule: {before_rule or 'None'}).")
+                evidence.append(f"After: AI crawler remains ALLOWED by robots.txt (rule: {after_rule or 'None'}).")
+                evidence.append("Expected robots.txt restriction was NOT applied.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+
         # Case 5: Already fixed / not an issue before validation
         if before_allowed:
             evidence.append(
@@ -341,6 +399,46 @@ class FixValidationEngine:
         }
 
         evidence: List[str] = []
+
+        # Check if this validation is for an AI restriction
+        is_restriction = (
+            target.expected_resolved_state in ("CHALLENGED", "BLOCKED", "RESTRICTED")
+            or target.category == IssueCategory.AI_RESTRICTION
+            or "RESTRICT" in str(target.description or "").upper()
+        )
+
+        if is_restriction:
+            if a_blocked or a_verdict in ("CHALLENGED", "BLOCKED") or a_status in (403, 429):
+                evidence.append(f"Before: AI crawler was accessible ({b_verdict}, HTTP {b_status}).")
+                evidence.append(f"After: AI crawler is successfully challenged/blocked ({a_verdict} via {a_mech}, HTTP {a_status}).")
+                evidence.append(f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}).")
+                evidence.append("WAF/anti-bot challenge restriction confirmed active.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.VERIFIED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+            else:
+                evidence.append(f"Before: AI crawler was accessible ({b_verdict}, HTTP {b_status}).")
+                evidence.append(f"After: AI crawler remains accessible (HTTP {a_status}, {a_verdict}).")
+                evidence.append("Expected WAF/anti-bot restriction was NOT applied.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
 
         # Case 5: Already accessible before
         if not b_blocked and b_verdict == "ACCESSIBLE" and b_status == 200:
@@ -505,6 +603,47 @@ class FixValidationEngine:
         issue_after = {"http_status": a_status}
 
         evidence: List[str] = []
+
+        # Check if this validation is for an AI restriction (e.g. rate limit / 429)
+        is_restriction = (
+            target.expected_resolved_state in ("BLOCKED", "429", "RESTRICTED")
+            or target.category == IssueCategory.AI_RESTRICTION
+            or "RESTRICT" in str(target.description or "").upper()
+            or str(target.description or "").upper().startswith("AI_RATE_LIMIT")
+        )
+
+        if is_restriction:
+            if a_status == 429 or a_status in (429, 403):
+                evidence.append(f"Before: server returned HTTP {b_status}.")
+                evidence.append(f"After: server successfully returned HTTP {a_status} (rate limiting active).")
+                evidence.append(f"Score changed by {score_delta:+d} points ({before_score} -> {after_score}).")
+                evidence.append("AI rate limit restriction confirmed active.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.VERIFIED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
+            else:
+                evidence.append(f"Before: server returned HTTP {b_status}.")
+                evidence.append(f"After: server returned HTTP {a_status} (expected HTTP 429).")
+                evidence.append("Expected rate limit restriction was NOT applied.")
+                return ValidationResult(
+                    before_score=before_score,
+                    after_score=after_score,
+                    score_delta=score_delta,
+                    issue_before=issue_before,
+                    issue_after=issue_after,
+                    fix_status=fix_status,
+                    validation_status=ValidationStatus.FAILED,
+                    evidence=evidence,
+                    timestamp=timestamp,
+                )
 
         if b_status == 200:
             evidence.append(f"Baseline HTTP status was ALREADY 200 OK. No status failure detected prior to fix.")
@@ -770,33 +909,67 @@ class FixValidationEngine:
 
         if isinstance(target_issue, str):
             s = target_issue.upper()
+            is_restriction = "RESTRICT" in s or "AI_" in s
             if "ROBOT" in s:
-                return TargetIssue(category=IssueCategory.ROBOTS_TXT, description=target_issue)
-            elif "WAF" in s or "CLOUDFLARE" in s or "CHALLENGE" in s:
-                return TargetIssue(category=IssueCategory.WAF_CHALLENGE, description=target_issue)
+                return TargetIssue(
+                    category=IssueCategory.ROBOTS_TXT,
+                    expected_resolved_state="RESTRICTED" if is_restriction else "ALLOWED",
+                    description=target_issue,
+                )
+            elif "WAF" in s or "CLOUDFLARE" in s or ("CHALLENGE" in s and "CAPTCHA" not in s):
+                return TargetIssue(
+                    category=IssueCategory.WAF_CHALLENGE,
+                    expected_resolved_state="CHALLENGED" if is_restriction else "ACCESSIBLE",
+                    description=target_issue,
+                )
             elif "CAPTCHA" in s or "TURNSTILE" in s:
-                return TargetIssue(category=IssueCategory.CAPTCHA, description=target_issue)
+                return TargetIssue(
+                    category=IssueCategory.CAPTCHA,
+                    expected_resolved_state="CHALLENGED" if is_restriction else "ACCESSIBLE",
+                    description=target_issue,
+                )
             elif "LATENCY" in s or "SPEED" in s or "PERF" in s:
                 return TargetIssue(category=IssueCategory.LATENCY, description=target_issue)
             elif "429" in s or "RATE" in s:
-                return TargetIssue(category=IssueCategory.RATE_LIMIT, description=target_issue)
+                return TargetIssue(
+                    category=IssueCategory.RATE_LIMIT,
+                    expected_resolved_state="BLOCKED" if is_restriction else "200",
+                    description=target_issue,
+                )
             elif "5" in s and "STATUS" in s:
                 return TargetIssue(category=IssueCategory.SERVER_ERROR, description=target_issue)
+            if is_restriction:
+                return TargetIssue(
+                    category=IssueCategory.AI_RESTRICTION,
+                    expected_resolved_state="RESTRICTED",
+                    description=target_issue,
+                )
             return TargetIssue(category=IssueCategory.OTHER, description=target_issue)
 
         if isinstance(target_issue, dict):
-            cat_str = str(target_issue.get("category", "OTHER")).upper()
+            cat_str = str(target_issue.get("category", target_issue.get("control_id", "OTHER"))).upper()
             cat = IssueCategory.OTHER
             for c in IssueCategory:
                 if c.value == cat_str:
                     cat = c
                     break
+            is_restr = "RESTRICT" in cat_str or "AI_" in cat_str or bool(target_issue.get("is_restriction"))
+            exp_state = target_issue.get("expected_resolved_state")
+            if not exp_state and is_restr:
+                if "ROBOT" in cat_str:
+                    exp_state = "RESTRICTED"
+                elif "WAF" in cat_str or "CAPTCHA" in cat_str or "CHALLENGE" in cat_str:
+                    exp_state = "CHALLENGED"
+                elif "RATE" in cat_str or "429" in cat_str:
+                    exp_state = "BLOCKED"
+                else:
+                    exp_state = "RESTRICTED"
             return TargetIssue(
                 category=cat,
                 persona=target_issue.get("persona"),
                 expected_previous_state=target_issue.get("expected_previous_state"),
-                expected_resolved_state=target_issue.get("expected_resolved_state"),
-                description=target_issue.get("description"),
+                expected_resolved_state=exp_state,
+                description=target_issue.get("description") or target_issue.get("control_id"),
                 threshold=target_issue.get("threshold"),
             )
 
