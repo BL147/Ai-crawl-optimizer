@@ -220,7 +220,12 @@ class CrawlerEngine:
             )
 
         # Run heuristic detection engine
-        detection = BotBlockDetector.detect(http=http_obs, page=page_obs, html_content=html_content)
+        detection = BotBlockDetector.detect(
+            http=http_obs,
+            page=page_obs,
+            html_content=html_content,
+            robots=robots_result,
+        )
 
         return CrawlResult(
             target_url=url,

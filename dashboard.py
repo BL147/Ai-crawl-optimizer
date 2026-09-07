@@ -1,3 +1,4 @@
+<<<<<<< Updated upstream
 import os
 import time
 import textwrap
@@ -24,12 +25,23 @@ st.set_page_config(
 # -----------------------------------------------------------------------------
 # ENVIRONMENT & API DETECTION
 # -----------------------------------------------------------------------------
+=======
+"""AI Crawl Optimizer — Streamlit Dashboard (Review 1 Tab Layout)."""
+
+import os
+import time
+import pandas as pd
+import streamlit as st
+from urllib.parse import urlparse
+
+>>>>>>> Stashed changes
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
     pass
 
+<<<<<<< Updated upstream
 has_gemini_key = bool(os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY"))
 
 # -----------------------------------------------------------------------------
@@ -652,6 +664,137 @@ st.markdown(
 # -----------------------------------------------------------------------------
 # HELPER FUNCTIONS
 # -----------------------------------------------------------------------------
+=======
+from crawler import list_personas
+from orchestration import run_audit
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Page config
+# ─────────────────────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="AI Crawl Optimizer",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="collapsed",
+)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Global CSS — dark SaaS theme
+# ─────────────────────────────────────────────────────────────────────────────
+st.markdown("""
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+
+html, body, [class*="css"] {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #090e1a;
+    color: #e2e8f0;
+}
+
+/* Hero */
+.hero {
+    background: linear-gradient(135deg, #0f1e3d 0%, #0d1728 60%, #0a1020 100%);
+    border: 1px solid rgba(59,130,246,0.18);
+    border-radius: 16px;
+    padding: 1.6rem 2rem;
+    margin-bottom: 1.4rem;
+    position: relative;
+    overflow: hidden;
+}
+.hero::before {
+    content: "";
+    position: absolute;
+    top: -60px; right: -80px;
+    width: 260px; height: 260px;
+    background: radial-gradient(circle, rgba(99,102,241,0.15) 0%, transparent 70%);
+    pointer-events: none;
+}
+.hero-title {
+    font-size: 1.75rem;
+    font-weight: 800;
+    letter-spacing: -0.03em;
+    background: linear-gradient(135deg, #ffffff 30%, #94a3b8 100%);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    margin: 0 0 0.3rem 0;
+}
+.hero-sub { font-size: 0.9rem; color: #64748b; margin: 0; }
+.pill {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.25rem 0.75rem; border-radius: 9999px;
+    font-size: 0.75rem; font-weight: 600; letter-spacing: 0.03em; margin-top: 0.75rem;
+}
+.pill-green { background: rgba(16,185,129,0.12); color: #34d399; border: 1px solid rgba(16,185,129,0.3); }
+.pill-amber { background: rgba(245,158,11,0.12); color: #fbbf24; border: 1px solid rgba(245,158,11,0.3); }
+
+/* Score card */
+.score-card {
+    background: linear-gradient(145deg, #111c35 0%, #0b1328 100%);
+    border: 1px solid rgba(59,130,246,0.22);
+    border-radius: 16px; padding: 1.8rem 1.4rem; text-align: center;
+    position: relative; overflow: hidden;
+    box-shadow: 0 16px 40px -10px rgba(0,0,0,0.5);
+}
+.score-card::after {
+    content: ""; position: absolute; top: 0; left: 0; right: 0; height: 3px;
+    background: linear-gradient(90deg, #3b82f6, #8b5cf6, #ec4899);
+}
+.score-label { font-size: 0.7rem; letter-spacing: 0.14em; font-weight: 700; text-transform: uppercase; color: #64748b; margin-bottom: 0.4rem; }
+.score-num { font-size: 4rem; font-weight: 900; line-height: 1; letter-spacing: -0.05em; background: linear-gradient(180deg, #ffffff 30%, #cbd5e1 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+.score-denom { font-size: 1rem; color: #475569; font-weight: 600; margin-bottom: 0.8rem; }
+.risk-badge { display: inline-block; padding: 0.3rem 1rem; border-radius: 9999px; font-size: 0.75rem; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; }
+.risk-critical { background: rgba(239,68,68,0.15); color: #f87171; border: 1px solid rgba(239,68,68,0.5); }
+.risk-high     { background: rgba(249,115,22,0.15); color: #fb923c; border: 1px solid rgba(249,115,22,0.4); }
+.risk-medium   { background: rgba(245,158,11,0.15); color: #fbbf24; border: 1px solid rgba(245,158,11,0.4); }
+.risk-low      { background: rgba(34,197,94,0.15);  color: #4ade80; border: 1px solid rgba(34,197,94,0.4); }
+
+/* Detection checklist */
+.det-card { background: #111c35; border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 1.2rem 1.4rem; }
+.det-row { display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid rgba(255,255,255,0.04); font-size: 0.88rem; color: #cbd5e1; line-height: 1.4; }
+.det-row:last-child { border-bottom: none; }
+.icon-pass { color: #34d399; font-weight: 800; font-size: 1rem; flex-shrink: 0; }
+.icon-fail { color: #f87171; font-weight: 800; font-size: 1rem; flex-shrink: 0; }
+.icon-warn { color: #fbbf24; font-weight: 800; font-size: 1rem; flex-shrink: 0; }
+.icon-info { color: #60a5fa; font-weight: 800; font-size: 1rem; flex-shrink: 0; }
+
+/* Penalty rows */
+.penalty-row { display: flex; justify-content: space-between; align-items: flex-start; padding: 0.7rem 0.9rem; border-radius: 10px; margin-bottom: 0.45rem; gap: 1rem; }
+.pen-critical { background: rgba(239,68,68,0.08); border-left: 3px solid #ef4444; }
+.pen-high     { background: rgba(249,115,22,0.08); border-left: 3px solid #f97316; }
+.pen-medium   { background: rgba(245,158,11,0.08); border-left: 3px solid #f59e0b; }
+.pen-low      { background: rgba(99,102,241,0.07); border-left: 3px solid #6366f1; }
+.pen-label { font-size: 0.84rem; font-weight: 600; color: #e2e8f0; }
+.pen-detail { font-size: 0.77rem; color: #94a3b8; margin-top: 0.18rem; }
+.pen-pts { font-size: 0.9rem; font-weight: 800; flex-shrink: 0; }
+.pts-neg  { color: #f87171; }
+.pts-zero { color: #94a3b8; }
+
+/* Remediation */
+.rem-card { background: linear-gradient(145deg, #0f1c33 0%, #090f1e 100%); border: 1px solid rgba(99,102,241,0.25); border-radius: 14px; padding: 1.4rem 1.6rem; margin-bottom: 1rem; }
+.rem-source-badge { display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.22rem 0.75rem; border-radius: 9999px; font-size: 0.72rem; font-weight: 700; letter-spacing: 0.05em; text-transform: uppercase; margin-bottom: 0.85rem; }
+.rem-gemini   { background: rgba(99,102,241,0.15); border: 1px solid rgba(99,102,241,0.4); color: #a5b4fc; }
+.rem-grounded { background: rgba(59,130,246,0.12); border: 1px solid rgba(59,130,246,0.35); color: #93c5fd; }
+.rem-problem  { font-size: 0.85rem; color: #94a3b8; margin-bottom: 0.6rem; line-height: 1.5; }
+.rem-fix      { font-size: 0.88rem; color: #cbd5e1; line-height: 1.55; }
+
+/* Form */
+div[data-testid="stForm"] { background: rgba(17,28,53,0.55); border: 1px solid rgba(255,255,255,0.07); border-radius: 14px; padding: 1.4rem 1.6rem; backdrop-filter: blur(8px); }
+
+/* Section headings */
+.section-head { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase; color: #475569; margin: 0 0 0.65rem 0; padding-bottom: 0.4rem; border-bottom: 1px solid rgba(255,255,255,0.06); }
+
+/* Mini metric */
+.mini-metric { background: #111c35; border: 1px solid rgba(255,255,255,0.07); border-radius: 10px; padding: 0.8rem 1rem; text-align: center; }
+.mini-metric-val { font-size: 1.5rem; font-weight: 800; color: #f1f5f9; }
+.mini-metric-lbl { font-size: 0.72rem; color: #64748b; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 0.2rem; }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────────────────────────
+>>>>>>> Stashed changes
 def normalize_url(url: str) -> str:
     url = url.strip()
     if not url:
@@ -661,6 +804,7 @@ def normalize_url(url: str) -> str:
     return url
 
 
+<<<<<<< Updated upstream
 def _build_aggregate_payload(results: List[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Build a single scoring payload from ALL persona crawl results.
@@ -1458,3 +1602,432 @@ st.markdown(
     '</div>',
     unsafe_allow_html=True,
 )
+=======
+def _robots_access_label(robots_allowed: bool, is_blocked: bool, verdict: str):
+    """Return (icon, css_class, text) for crawler access status — corrected semantics."""
+    if is_blocked or verdict == "BLOCKED":
+        return "✗", "icon-fail", "Crawler actively blocked"
+    if not robots_allowed:
+        return "↔", "icon-info", "Technically reachable — crawler policy restricts indexing"
+    return "✓", "icon-pass", "Crawler access allowed"
+
+
+def _risk_class(risk: str) -> str:
+    return {"CRITICAL": "risk-critical", "HIGH": "risk-high",
+            "MEDIUM": "risk-medium", "LOW": "risk-low"}.get(risk.upper().replace(" RISK", ""), "risk-high")
+
+
+def _penalty_class(severity: str) -> str:
+    return {"CRITICAL": "pen-critical", "HIGH": "pen-high",
+            "MEDIUM": "pen-medium", "LOW": "pen-low"}.get(severity.upper(), "pen-low")
+
+
+def _det_row(icon_cls: str, icon: str, text: str) -> str:
+    return f'<div class="det-row"><span class="{icon_cls}">{icon}</span><span>{text}</span></div>'
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Sidebar
+# ─────────────────────────────────────────────────────────────────────────────
+has_env_key = bool(os.getenv("GEMINI_API_KEY") or os.getenv("LLM_API_KEY"))
+
+with st.sidebar:
+    st.markdown("### 🤖 Engine Status")
+    if has_env_key:
+        st.markdown('<div style="background:rgba(16,185,129,0.1);border:1px solid rgba(16,185,129,0.3);border-radius:10px;padding:0.85rem;color:#34d399;"><div style="font-weight:700;font-size:0.88rem;margin-bottom:0.25rem;">✓ Gemini AI Active</div><div style="font-size:0.78rem;color:#a7f3d0;line-height:1.4;">API key detected. Generative remediation fully enabled.</div></div>', unsafe_allow_html=True)
+    else:
+        st.markdown('<div style="background:rgba(245,158,11,0.1);border:1px solid rgba(245,158,11,0.3);border-radius:10px;padding:0.85rem;color:#fbbf24;"><div style="font-weight:700;font-size:0.88rem;margin-bottom:0.25rem;">ℹ Grounded Engine</div><div style="font-size:0.78rem;color:#fde68a;line-height:1.4;">Add <code>GEMINI_API_KEY</code> to <code>.env</code> for AI remediation.</div></div>', unsafe_allow_html=True)
+    st.markdown("---")
+    st.markdown("#### Simulated AI Crawlers")
+    st.caption("• GPTBot (OpenAI)\n• ClaudeBot (Anthropic)\n• PerplexityBot\n• ByteSpider (TikTok/Douyin)\n• Google-Extended (Gemini/Bard)")
+    st.markdown("---")
+    st.caption("AI Crawl Optimizer v2.5 · RFC 9309 Compliant")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Hero
+# ─────────────────────────────────────────────────────────────────────────────
+pill_html = (
+    '<span class="pill pill-green">⚡ Gemini 2.5 Generative Remediation Active</span>'
+    if has_env_key
+    else '<span class="pill pill-amber">🛡 Deterministic Grounded Engine Active</span>'
+)
+st.markdown(f"""
+<div class="hero">
+    <div class="hero-title">🌐 AI Crawl Optimizer</div>
+    <div class="hero-sub">Audit multi-persona AI crawler compatibility · Detect WAF edge blocks · Generate instant code fixes</div>
+    {pill_html}
+</div>
+""", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Audit Form
+# ─────────────────────────────────────────────────────────────────────────────
+available_personas = list_personas()
+ai_persona_keys = [p["id"] for p in available_personas if p.get("is_ai_agent")]
+
+with st.form("audit_form"):
+    col_url, col_mode = st.columns([2.5, 1.5])
+    with col_url:
+        url_input = st.text_input(
+            "Target Website URL",
+            placeholder="https://example.com",
+            help="Enter the site to audit for AI crawler accessibility",
+        )
+    with col_mode:
+        audit_mode = st.radio(
+            "Audit Mode",
+            ["All AI Bots (Matrix)", "Single Persona"],
+            horizontal=True,
+            index=0,
+        )
+
+    selected_personas = []
+    if audit_mode == "Single Persona":
+        chosen = st.selectbox(
+            "Select Persona",
+            options=ai_persona_keys,
+            format_func=lambda pid: next(
+                (p["display_name"] for p in available_personas if p["id"] == pid), pid
+            ),
+        )
+        selected_personas = [chosen]
+    else:
+        selected_personas = ["gptbot", "claudebot", "perplexitybot", "bytespider", "google_extended"]
+
+    include_baseline = st.checkbox(
+        "Include Desktop Chrome baseline (detects selective AI blocking)", value=True
+    )
+    submit = st.form_submit_button("🚀 Run Audit", type="primary", use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Audit Execution
+# ─────────────────────────────────────────────────────────────────────────────
+if submit:
+    if not url_input.strip():
+        st.error("Please enter a valid URL.")
+        st.stop()
+
+    norm_url = normalize_url(url_input)
+
+    prog = st.empty()
+    for i, s in enumerate(["Connecting…", "Browser context ready", "Simulating AI personas", "Checking robots.txt", "Analyzing signals"]):
+        prog.markdown(f"**{s}** {'·' * (i + 1)}")
+        time.sleep(0.18)
+    prog.empty()
+
+    with st.spinner(f"Auditing {len(selected_personas)} persona(s) via Playwright…"):
+        try:
+            results = [
+                run_audit(
+                    norm_url,
+                    persona=persona,
+                    include_baseline=include_baseline,
+                    headless=True,
+                    timeout_seconds=12.0,
+                )
+                for persona in selected_personas
+            ]
+        except Exception as exc:
+            st.error(f"Audit failed: {exc}")
+            st.stop()
+
+    # ── Unpack primary result ──
+    primary     = results[0]
+    http_data   = primary.get("http", {})
+    robots_data = primary.get("robots_txt", {})
+    detection   = primary.get("detection", {})
+    inference   = detection.get("inference", {})
+    scoring     = primary.get("scoring", {})
+    summary     = primary.get("summary", {})
+    remediation = primary.get("remediation", {})
+    baseline    = primary.get("baseline")
+
+    score      = summary.get("score", scoring.get("score", 0))
+    risk_level = summary.get("risk_level", scoring.get("risk_level", "HIGH RISK"))
+    penalties  = scoring.get("penalties", [])
+    reasons    = scoring.get("reasons", [])
+    grade      = scoring.get("grade", "F")
+
+    status_code    = http_data.get("status_code")
+    is_blocked     = bool(detection.get("is_blocked", False))
+    verdict        = str(inference.get("verdict", "ACCESSIBLE")).upper()
+    mechanism      = str(inference.get("mechanism", "NONE")).upper()
+    robots_exists  = robots_data.get("exists", False)
+    robots_allowed = robots_data.get("is_allowed", True)
+
+    # ── KPI row ──
+    kpi1, kpi2, kpi3, kpi4 = st.columns(4)
+    with kpi1:
+        rc = _risk_class(risk_level)
+        st.markdown(f"""
+        <div class="score-card">
+            <div class="score-label">AI Accessibility Score</div>
+            <div class="score-num">{score}</div>
+            <div class="score-denom">/ 100 &nbsp;·&nbsp; Grade {grade}</div>
+            <span class="risk-badge {rc}">{risk_level}</span>
+        </div>""", unsafe_allow_html=True)
+    with kpi2:
+        http_disp = str(status_code) if status_code else "—"
+        http_col = "#34d399" if status_code == 200 else "#f87171" if status_code in (403, 401, 429) else "#fbbf24"
+        st.markdown(f'<div class="mini-metric"><div class="mini-metric-val" style="color:{http_col};">{http_disp}</div><div class="mini-metric-lbl">HTTP Status</div></div>', unsafe_allow_html=True)
+    with kpi3:
+        lat = http_data.get("response_time_ms", 0) or 0
+        lat_col = "#34d399" if lat < 1500 else "#fbbf24" if lat < 3000 else "#f87171"
+        st.markdown(f'<div class="mini-metric"><div class="mini-metric-val" style="color:{lat_col};">{lat} ms</div><div class="mini-metric-lbl">Latency</div></div>', unsafe_allow_html=True)
+    with kpi4:
+        mech_disp = mechanism if mechanism not in ("NONE", "") else "None"
+        mech_col = "#f87171" if mech_disp not in ("None", "HTTP_FORBIDDEN", "INCONCLUSIVE") else "#94a3b8"
+        st.markdown(f'<div class="mini-metric"><div class="mini-metric-val" style="color:{mech_col};font-size:0.95rem;">{mech_disp}</div><div class="mini-metric-lbl">WAF / Mechanism</div></div>', unsafe_allow_html=True)
+
+    st.write("")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # THREE TABS
+    # ─────────────────────────────────────────────────────────────────────
+    tab1, tab2, tab3 = st.tabs([
+        "🤖  Multi-Bot Emulation Matrix",
+        "📊  Scoring Deduction",
+        "🛠  AI Remediation",
+    ])
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 1 — Multi-Bot Emulation Matrix
+    # ══════════════════════════════════════════════════════════════════════
+    with tab1:
+        left_col, right_col = st.columns([1, 1.5])
+
+        with left_col:
+            st.markdown("**Primary Persona Detection**")
+            rows_html = []
+
+            reachable = primary.get("success") or (status_code is not None)
+            rows_html.append(_det_row(
+                "icon-pass" if reachable else "icon-fail",
+                "✓" if reachable else "✗",
+                "Website reachable" if reachable else "Website unreachable"
+            ))
+
+            rows_html.append(_det_row(
+                "icon-pass" if robots_exists else "icon-warn",
+                "✓" if robots_exists else "⚠",
+                "robots.txt found" if robots_exists else "robots.txt not found"
+            ))
+
+            # Fixed robots.txt semantics
+            acc_cls, acc_icon, acc_text = _robots_access_label(robots_allowed, is_blocked, verdict)
+            rows_html.append(_det_row(acc_cls, acc_icon, acc_text))
+
+            if status_code == 200:
+                rows_html.append(_det_row("icon-pass", "✓", "HTTP 200 OK"))
+            elif status_code in (403, 401):
+                label = f"HTTP {status_code}"
+                if verdict == "INCONCLUSIVE":
+                    label += " — Inconclusive (no WAF signature)"
+                rows_html.append(_det_row("icon-fail", "✗", label))
+            elif status_code == 429:
+                rows_html.append(_det_row("icon-fail", "✗", "HTTP 429 Rate Limited"))
+            elif status_code:
+                rows_html.append(_det_row("icon-warn", "⚠", f"HTTP {status_code}"))
+            else:
+                rows_html.append(_det_row("icon-fail", "✗", "HTTP connection failed"))
+
+            is_challenge = mechanism not in ("NONE", "HTTP_FORBIDDEN", "INCONCLUSIVE", "")
+            rows_html.append(_det_row(
+                "icon-warn" if is_challenge else "icon-pass",
+                "⚠" if is_challenge else "✓",
+                f"Bot challenge: {mechanism}" if is_challenge else "No bot challenge detected"
+            ))
+
+            st.markdown(f'<div class="det-card">{"".join(rows_html)}</div>', unsafe_allow_html=True)
+
+        with right_col:
+            st.markdown("**Observed Evidence**")
+            evidence = detection.get("evidence", {})
+            ev_lines = []
+            if evidence:
+                if evidence.get("status_code"):
+                    ev_lines.append(f"HTTP status: `{evidence['status_code']}`")
+                for h in (evidence.get("matched_response_headers") or [])[:4]:
+                    ev_lines.append(f"Header: `{h}`")
+                for kw in (evidence.get("matched_keywords") or [])[:4]:
+                    ev_lines.append(f"Keyword: `{kw}`")
+                for dom in (evidence.get("dom_signals") or [])[:3]:
+                    ev_lines.append(f"DOM: `{dom}`")
+                title = evidence.get("page_title", "")
+                if title:
+                    ev_lines.append(f"Page title: *{title[:70]}*")
+            if ev_lines:
+                for line in ev_lines:
+                    st.markdown(f"• {line}")
+            else:
+                st.caption("No specific signals matched.")
+
+            inf_summary = inference.get("summary", "")
+            conf = inference.get("confidence", None)
+            if inf_summary:
+                st.info(f"**Inference:** {inf_summary}")
+            if conf is not None:
+                st.caption(f"Detection confidence: {conf:.0%}")
+
+        st.write("---")
+        st.markdown('<p class="section-head">Cross-Persona Compliance Matrix</p>', unsafe_allow_html=True)
+
+        matrix_rows = []
+        all_results = list(results)
+        if baseline:
+            all_results.append(baseline)
+
+        for r in all_results:
+            p_id   = r.get("persona")
+            p_name = next((p["display_name"] for p in available_personas if p["id"] == p_id),
+                          p_id or "Desktop Chrome (Baseline)")
+            r_http    = r.get("http", {})
+            r_robots  = r.get("robots_txt", {})
+            r_det     = r.get("detection", {})
+            r_inf     = r_det.get("inference", {})
+            r_status  = r_http.get("status_code")
+            r_blocked = bool(r_det.get("is_blocked", False))
+            r_verdict = str(r_inf.get("verdict", "ACCESSIBLE")).upper()
+            r_mech    = str(r_inf.get("mechanism", "NONE"))
+            r_allowed = r_robots.get("is_allowed", True)
+            r_lat     = r_http.get("response_time_ms", 0) or 0
+
+            if r_blocked or r_verdict == "BLOCKED":
+                access = f"❌ Blocked ({r_status or 'Denied'})"
+            elif r_status == 200 and r_allowed:
+                access = "✅ Accessible (200 OK)"
+            elif r_status == 200 and not r_allowed:
+                access = "↔ Reachable — policy restricts crawling"
+            elif r_status == 403 and r_verdict == "INCONCLUSIVE":
+                access = "⚠ HTTP 403 (Inconclusive)"
+            elif r_status:
+                access = f"⚠ HTTP {r_status}"
+            else:
+                access = "❌ Connection failed"
+
+            matrix_rows.append({
+                "Persona":           p_name,
+                "Access Status":     access,
+                "robots.txt Policy": "✅ Allowed" if r_allowed else "🚫 Disallowed",
+                "WAF / Mechanism":   r_mech if r_mech not in ("NONE", "") else "—",
+                "Verdict":           r_verdict,
+                "Latency (ms)":      r_lat,
+            })
+
+        st.dataframe(pd.DataFrame(matrix_rows), use_container_width=True, hide_index=True)
+
+        if baseline and results:
+            base_code = baseline.get("http", {}).get("status_code")
+            ai_any_restricted = any(
+                r.get("detection", {}).get("is_blocked") or
+                str(r.get("detection", {}).get("inference", {}).get("verdict", "")).upper() in ("RESTRICTED", "CHALLENGED", "BLOCKED")
+                for r in results
+            )
+            if base_code == 200 and ai_any_restricted:
+                st.warning("⚠️ **Selective AI Restriction Detected** — Desktop Chrome receives HTTP 200, but AI crawler personas are restricted, challenged, or blocked.")
+            elif base_code == 200 and not ai_any_restricted:
+                st.success("✅ **Consistent Access** — AI crawlers and human browsers both have unimpeded access.")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 2 — Scoring Deduction
+    # ══════════════════════════════════════════════════════════════════════
+    with tab2:
+        sc_left, sc_right = st.columns([1, 2])
+
+        with sc_left:
+            st.markdown('<p class="section-head">Score Summary</p>', unsafe_allow_html=True)
+            base_score   = scoring.get("base_score", 100)
+            total_deduct = scoring.get("total_deductions", base_score - score)
+            rc2 = _risk_class(risk_level)
+            st.markdown(f"""
+            <div class="score-card" style="padding:1.4rem 1.2rem;">
+                <div class="score-label">AI Accessibility Score</div>
+                <div class="score-num">{score}</div>
+                <div class="score-denom">/ {base_score} &nbsp;·&nbsp; Grade {grade}</div>
+                <span class="risk-badge {rc2}">{risk_level}</span>
+            </div>""", unsafe_allow_html=True)
+            st.write("")
+            m1, m2 = st.columns(2)
+            m1.metric("Base Score", base_score)
+            m2.metric("Total Deducted", f"−{total_deduct}")
+
+        with sc_right:
+            st.markdown('<p class="section-head">Penalty Breakdown</p>', unsafe_allow_html=True)
+            if penalties:
+                for p in penalties:
+                    sev    = str(p.get("severity", "LOW")).upper()
+                    factor = p.get("factor", "Unknown")
+                    detail = p.get("detail", "")
+                    cat    = p.get("category", "")
+                    pts    = p.get("penalty", 0)
+                    pc     = _penalty_class(sev)
+                    pts_cls = "pts-neg" if pts < 0 else "pts-zero"
+                    pts_str = f"{pts}" if pts <= 0 else f"+{pts}"
+                    st.markdown(f"""
+                    <div class="penalty-row {pc}">
+                        <div style="flex:1;">
+                            <div class="pen-label">{factor}</div>
+                            <div class="pen-detail">{cat} · {detail}</div>
+                        </div>
+                        <div class="pen-pts {pts_cls}">{pts_str} pts</div>
+                    </div>""", unsafe_allow_html=True)
+            else:
+                st.success("✅ No penalties applied — website is fully accessible to AI crawlers.")
+
+        if reasons:
+            st.write("---")
+            st.markdown('<p class="section-head">Score Reasoning</p>', unsafe_allow_html=True)
+            for r in reasons:
+                st.markdown(f"• {r}")
+
+    # ══════════════════════════════════════════════════════════════════════
+    # TAB 3 — AI Remediation
+    # ══════════════════════════════════════════════════════════════════════
+    with tab3:
+        st.markdown('<p class="section-head">Remediation Plan</p>', unsafe_allow_html=True)
+
+        if not remediation:
+            st.info("No remediation data returned for this audit.")
+        else:
+            badge = (
+                '<span class="rem-source-badge rem-gemini">✨ Generated by Gemini AI</span>'
+                if remediation.get("model_used")
+                else '<span class="rem-source-badge rem-grounded">🛡 Deterministic Grounded Engine (RFC 9309)</span>'
+            )
+            problem = remediation.get("problem_detected", "No critical issues detected.")
+            fix     = remediation.get("recommended_fix", "")
+            uncert  = remediation.get("uncertainty", "")
+
+            st.markdown(badge, unsafe_allow_html=True)
+            if uncert:
+                st.info(f"ℹ {uncert}")
+            st.markdown(f"""
+            <div class="rem-card">
+                <div class="rem-problem"><strong>Problem detected:</strong><br>{problem}</div>
+                <div class="rem-fix"><strong>Recommended fix:</strong><br>{fix}</div>
+            </div>""", unsafe_allow_html=True)
+
+            code_fix = remediation.get("code_or_configuration_change", "")
+            if code_fix:
+                st.markdown("**Configuration / Code Change**")
+                st.code(code_fix)
+
+        if len(results) > 1:
+            st.write("---")
+            st.markdown('<p class="section-head">Per-Persona Remediation</p>', unsafe_allow_html=True)
+            for r in results:
+                p_id   = r.get("persona", "unknown")
+                p_name = next((p["display_name"] for p in available_personas if p["id"] == p_id), p_id)
+                rem    = r.get("remediation", {})
+                if not rem:
+                    continue
+                with st.expander(f"**{p_name}** — {str(rem.get('problem_detected', 'No issue'))[:80]}"):
+                    st.caption("✨ Gemini AI" if rem.get("model_used") else "🛡 Grounded Engine")
+                    st.markdown(f"**Problem:** {rem.get('problem_detected', '')}")
+                    st.markdown(f"**Fix:** {rem.get('recommended_fix', '')}")
+                    if rem.get("code_or_configuration_change"):
+                        st.code(rem["code_or_configuration_change"])
+>>>>>>> Stashed changes

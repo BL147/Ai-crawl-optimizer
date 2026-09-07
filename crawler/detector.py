@@ -8,6 +8,7 @@ from crawler.models import (
     DetectionResult,
     HttpObservation,
     PageObservation,
+    RobotsDirectives,
 )
 
 
@@ -21,6 +22,7 @@ class BotBlockDetector:
         http: HttpObservation,
         page: PageObservation,
         html_content: str = "",
+        robots: Optional[RobotsDirectives] = None,
     ) -> DetectionResult:
         status = http.status_code
         headers_lower = {k.lower(): v for k, v in http.headers.items()}
@@ -102,6 +104,8 @@ class BotBlockDetector:
         if status == 403 and any(t in title_lower or t in snippet_lower for t in ["forbidden", "access denied", "403"]):
             matched_keywords.append("403 Forbidden")
 
+        robots_rule = robots.matching_rule if robots and not robots.is_allowed else None
+
         evidence = DetectionEvidence(
             status_code=status,
             matched_headers=matched_headers,
@@ -109,6 +113,7 @@ class BotBlockDetector:
             matched_keywords=matched_keywords,
             page_title=page.title,
             snippet_preview=page.snippet[:200] if page.snippet else None,
+            robots_rule=robots_rule,
         )
 
         # -------------------------------------------------------------
@@ -251,6 +256,18 @@ class BotBlockDetector:
                 is_blocked=False,
             )
 
+        # Check 11: Robots.txt Crawler Policy Disallow
+        if robots is not None and not robots.is_allowed:
+            rule_detail = robots.matching_rule or "Disallow"
+            return cls._build_result(
+                evidence=evidence,
+                verdict="RESTRICTED",
+                mechanism=BlockType.NONE,
+                confidence=1.0,
+                summary=f"Technically reachable (HTTP {status or 200}), but crawler policy (robots.txt) restricts crawling/indexing ({rule_detail}).",
+                is_blocked=False,
+            )
+
         # Default: Clean accessible page
         return cls._build_result(
             evidence=evidence,
@@ -277,6 +294,8 @@ class BotBlockDetector:
         signals.extend(evidence.matched_headers)
         signals.extend(evidence.dom_signals)
         signals.extend([f"Keyword: '{k}'" for k in evidence.matched_keywords])
+        if evidence.robots_rule:
+            signals.append(f"Robots policy: {evidence.robots_rule}")
 
         return DetectionResult(
             evidence=evidence,

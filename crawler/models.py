@@ -62,11 +62,12 @@ class DetectionEvidence(BaseModel):
     matched_keywords: List[str] = Field(default_factory=list)
     page_title: Optional[str] = None
     snippet_preview: Optional[str] = None
+    robots_rule: Optional[str] = None
 
 
 class DetectionInference(BaseModel):
     """Inferred conclusions derived from observations."""
-    verdict: str = "ACCESSIBLE"  # ACCESSIBLE | CHALLENGED | BLOCKED | INCONCLUSIVE
+    verdict: str = "ACCESSIBLE"  # ACCESSIBLE | CHALLENGED | BLOCKED | INCONCLUSIVE | RESTRICTED
     mechanism: BlockType = BlockType.NONE
     confidence: float = 0.0
     summary: str = "No access restrictions detected."

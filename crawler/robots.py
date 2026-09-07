@@ -185,8 +185,8 @@ async def inspect_robots(
                 raw_content=content[:2000] if len(content) > 2000 else content,
             )
 
-        elif resp.status_code in (401, 403):
-            # Blocked from reading robots.txt itself
+        elif resp.status_code in (401, 403, 429):
+            # Blocked or rate limited from reading robots.txt itself (RFC 9309: fail closed)
             return RobotsDirectives(
                 exists=True,
                 url=robots_url,
@@ -194,8 +194,17 @@ async def inspect_robots(
                 is_allowed=False,
                 matching_rule=f"HTTP {resp.status_code} Access Denied to robots.txt",
             )
+        elif resp.status_code >= 500:
+            # Server error reading robots.txt (RFC 9309 Section 2.3.1.3: fail closed)
+            return RobotsDirectives(
+                exists=True,
+                url=robots_url,
+                status_code=resp.status_code,
+                is_allowed=False,
+                matching_rule=f"HTTP {resp.status_code} Server Error reading robots.txt (RFC 9309: fail closed)",
+            )
         else:
-            # 404 or other 4xx/5xx: Standard practice is unrestricted access when robots.txt is missing
+            # 404/410 or other client error: missing robots.txt defaults to unrestricted access
             return RobotsDirectives(
                 exists=False,
                 url=robots_url,
