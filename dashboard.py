@@ -1,5 +1,6 @@
 import os
 import time
+import textwrap
 from urllib.parse import urlparse
 from typing import List, Dict, Any, Optional
 
@@ -1116,6 +1117,7 @@ if "audit_results" in st.session_state:
                 <div style="font-size: 1.4rem; font-weight: 800; color: {clr}; white-space: nowrap; margin-left: 1.5rem;">-{pts}</div>
             </div>"""
 
+        rows_html = textwrap.dedent(rows_html).strip()
         st.markdown(f"""
         <div style="background: #0d1527; border: 1px solid rgba(255,255,255,0.08); border-radius: 14px; padding: 1.2rem 1.3rem;">
             <div style="display: flex; justify-content: space-between; align-items: center;
