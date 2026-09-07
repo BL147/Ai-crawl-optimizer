@@ -290,5 +290,58 @@ class TestResultSchema(unittest.TestCase):
     def test_schema_inconclusive(self): self._check(_inconclusive_403(), "inconclusive")
 
 
+class TestRestrictionScoringSymmetry(unittest.TestCase):
+    """Verifies that Accessibility and Restriction scoring are logically consistent and symmetrical."""
+
+    def test_unrestricted_site_shows_exposure_deductions_in_restriction_mode(self):
+        accessible_data = _accessible()
+        acc = calculate_score(accessible_data, mode="ACCESSIBILITY")
+        restr = calculate_score(accessible_data, mode="RESTRICTION")
+
+        self.assertEqual(acc["score"], 100, "Unrestricted site should have 100 accessibility score")
+        self.assertEqual(acc["total_deductions"], 0)
+
+        # In restriction mode, unrestricted access means exposure gaps (unrestricted robots + no WAF + unthrottled)
+        self.assertLess(restr["score"], 100, "Unrestricted site must have exposure deductions in restriction mode")
+        self.assertGreater(restr["total_deductions"], 0)
+        restr_factors = [p["factor"] for p in restr["penalties"]]
+        self.assertTrue(any("Robots" in f for f in restr_factors), "Missing robots exposure deduction")
+
+    def test_robots_restriction_symmetry(self):
+        accessible_data = _accessible()
+        restricted_robots_data = copy.deepcopy(accessible_data)
+        restricted_robots_data["robots_txt"] = {"ai_disallowed": True, "is_allowed": False}
+
+        acc_before = calculate_score(accessible_data, mode="ACCESSIBILITY")
+        acc_after = calculate_score(restricted_robots_data, mode="ACCESSIBILITY")
+        restr_before = calculate_score(accessible_data, mode="RESTRICTION")
+        restr_after = calculate_score(restricted_robots_data, mode="RESTRICTION")
+
+        # In Accessibility: disallowing AI crawlers penalizes accessibility score (-10)
+        self.assertEqual(acc_after["score"], acc_before["score"] - 10)
+
+        # In Restriction: disallowing AI crawlers eliminates exposure gap (+10 pts to security)
+        self.assertEqual(restr_after["score"], restr_before["score"] + 10)
+
+    def test_waf_challenge_symmetry(self):
+        accessible_data = _accessible()
+        waf_data = copy.deepcopy(accessible_data)
+        waf_data["bots"]["gptbot"]["status"] = 403
+        waf_data["bots"]["gptbot"]["waf"] = "Cloudflare"
+        waf_data["bots"]["gptbot"]["verdict"] = "BLOCKED"
+        waf_data["bots"]["gptbot"]["blocked"] = True
+
+        acc_before = calculate_score(accessible_data, mode="ACCESSIBILITY")
+        acc_after = calculate_score(waf_data, mode="ACCESSIBILITY")
+        restr_before = calculate_score(accessible_data, mode="RESTRICTION")
+        restr_after = calculate_score(waf_data, mode="RESTRICTION")
+
+        # Accessibility score drops due to WAF barrier (-20 pts)
+        self.assertEqual(acc_after["score"], acc_before["score"] - 20)
+
+        # Restriction score benefits from active WAF defense (+20 pts)
+        self.assertEqual(restr_after["score"], restr_before["score"] + 20)
+
+
 if __name__ == "__main__":
     unittest.main()

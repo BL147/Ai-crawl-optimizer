@@ -70,11 +70,11 @@ with st.sidebar:
 
     col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        if st.button("🔴 Set BEFORE", use_container_width=True):
+        if st.button("🔴 Set BEFORE", width="stretch"):
             set_mode("before")
             st.rerun()
     with col_btn2:
-        if st.button("🟢 Set AFTER", use_container_width=True):
+        if st.button("🟢 Set AFTER", width="stretch"):
             set_mode("after")
             st.rerun()
 
@@ -97,7 +97,7 @@ with col_preset:
     elif preset:
         target_url = preset
 with col_btn:
-    run_button = st.button("🚀 Run Audit", type="primary", use_container_width=True)
+    run_button = st.button("🚀 Run Audit", type="primary", width="stretch")
 
 if run_button or "audit_data" in st.session_state:
     if run_button:
@@ -156,7 +156,7 @@ if run_button or "audit_data" in st.session_state:
                 "Latency (ms)": f"{info.get('latency_ms', 0)} ms"
             })
         df_bots = pd.DataFrame(bot_list)
-        st.dataframe(df_bots, use_container_width=True, hide_index=True)
+        st.dataframe(df_bots, width="stretch", hide_index=True)
 
     with tab2:
         st.subheader("Deduction Breakdown")
@@ -173,7 +173,7 @@ if run_button or "audit_data" in st.session_state:
                     "Factor": p.get("factor"),
                     "Technical Detail": p.get("detail")
                 })
-            st.dataframe(pd.DataFrame(p_list), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(p_list), width="stretch", hide_index=True)
 
     with tab3:
         st.subheader("Autonomous Optimization & Fixes")
