@@ -33,205 +33,380 @@ class ScoringEngine:
     @classmethod
     def calculate(cls, audit_data: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Calculates the score and generates full breakdown.
-
-        Expected audit_data format:
-        {
-            "browser": {"status": 200, "latency_ms": 210},
-            "bots": {
-                "gpt_bot": {"status": 403, "waf": "Cloudflare", "captcha": True, "latency_ms": 120, "blocked": True},
-                "claude_bot": {"status": 403, "waf": "Cloudflare", "captcha": True, "latency_ms": 115, "blocked": True},
-                "perplexity_bot": {"status": 403, "waf": "Cloudflare", "captcha": True, "latency_ms": 130, "blocked": True},
-                "google_bot": {"status": 200, "waf": None, "captcha": False, "latency_ms": 180, "blocked": False}
-            },
-            "robots_txt": {
-                "status": 200,
-                "ai_disallowed": True, # or list of disallowed bot names
-                "details": "Disallow: / for GPTBot"
-            },
-            "waf_detected": "Cloudflare", # or None
-            "captcha_detected": True # or False
-        }
+        Event-based scoring: one compound penalty per access event category.
+        WAF + HTTP 403 from the same bot are ONE event, not two separate penalties.
+        Selective AI discrimination only fires when a REAL browser baseline exists.
+        total_deductions = sum(points_deducted) — invariant always holds.
         """
-        score = cls.BASE_SCORE
         penalties: List[Dict[str, Any]] = []
 
-        # Normalize input to handle Anshul's crawler models, baseline audits, or legacy dicts
         normalized = cls._normalize_input(audit_data)
-        bots_data = normalized["bots"]
-        browser_data = normalized["browser"]
-        robots_data = normalized["robots_txt"]
-        global_waf = normalized["waf_detected"]
-        global_captcha = normalized["captcha_detected"]
-        selective_ai_block = normalized.get("selective_ai_block_detected", False)
+        bots_data: Dict[str, Any] = normalized["bots"]
+        browser_data: Dict[str, Any] = normalized["browser"]
+        robots_data: Dict[str, Any] = normalized["robots_txt"]
+        selective_ai_block: bool = normalized.get("selective_ai_block_detected", False)
+        has_real_baseline: bool = browser_data.get("is_real", False)
 
-        # 1. Check HTTP Status Across AI Bots
-        blocked_bots = []
-        inconclusive_403_bots = []
-        rate_limited_bots = []
-        server_error_bots = []
-
+        # ====================================================================
+        # STEP 1: Classify each bot into ONE mutually exclusive event type
+        # (highest severity wins per bot — prevents double-categorisation)
+        # ====================================================================
+        bot_events: Dict[str, Dict[str, Any]] = {}
         for bot_name, bot_info in bots_data.items():
             raw_status = bot_info.get("status")
-            status = raw_status if isinstance(raw_status, int) else 200
-            verdict = bot_info.get("verdict", "")
-            is_blocked = bot_info.get("blocked", False) or (status in [401, 403] and verdict != "INCONCLUSIVE")
+            status: Optional[int] = raw_status if isinstance(raw_status, int) else None
+            verdict: str = str(bot_info.get("verdict", "")).upper()
+            mechanism: str = str(bot_info.get("mechanism", "NONE")).upper()
 
-            if is_blocked or verdict in ["BLOCKED", "CHALLENGED"]:
-                blocked_bots.append(bot_name)
-            elif status == 403 and verdict == "INCONCLUSIVE":
-                inconclusive_403_bots.append(bot_name)
-            elif status == 429 or bot_info.get("mechanism") == "HTTP_429_RATE_LIMITED":
-                rate_limited_bots.append(bot_name)
-            elif status >= 500:
-                server_error_bots.append(bot_name)
-
-        # Apply 403 / Access Denied penalty
-        if blocked_bots:
-            penalties.append({
-                "category": "HTTP Status",
-                "factor": "HTTP 403 Forbidden (Access Denied)",
-                "penalty": -cls.PENALTY_HTTP_403,
-                "severity": "CRITICAL",
-                "detail": f"AI search crawlers blocked for: {', '.join(blocked_bots)}"
-            })
-            score -= cls.PENALTY_HTTP_403
-        elif inconclusive_403_bots:
-            # Anshul Rule 11: Inconclusive 403 without active bot challenge
-            penalties.append({
-                "category": "HTTP Status",
-                "factor": "HTTP 403 Forbidden (Inconclusive)",
-                "penalty": -15,
-                "severity": "HIGH",
-                "detail": f"HTTP 403 returned without conclusive bot-shield signatures for: {', '.join(inconclusive_403_bots)}"
-            })
-            score -= 15
-
-        # Apply 429 penalty
-        if rate_limited_bots:
-            penalties.append({
-                "category": "HTTP Status",
-                "factor": "HTTP 429 Too Many Requests (Rate Limited)",
-                "penalty": -cls.PENALTY_HTTP_429,
-                "severity": "HIGH",
-                "detail": f"Rate limit / throttling triggered for: {', '.join(rate_limited_bots)}"
-            })
-            score -= cls.PENALTY_HTTP_429
-
-        # Apply 5xx penalty
-        if server_error_bots:
-            penalties.append({
-                "category": "HTTP Status",
-                "factor": "HTTP 5xx Server Error",
-                "penalty": -cls.PENALTY_HTTP_5XX,
-                "severity": "HIGH",
-                "detail": f"Server failure during crawl for: {', '.join(server_error_bots)}"
-            })
-            score -= cls.PENALTY_HTTP_5XX
-
-        # 2. WAF & Challenge Detection (only penalize if WAF challenged or blocked bots)
-        waf_challenging = any(
-            b.get("verdict") == "CHALLENGED" or
-            (b.get("mechanism") and b.get("mechanism") not in ["NONE", "HTTP_FORBIDDEN", "INCONCLUSIVE"]) or
-            (b.get("waf") and (b.get("blocked") or b.get("status") in [403, 429] or b.get("captcha")))
-            for b in bots_data.values()
-        )
-        if waf_challenging or (global_waf and any(b.get("blocked") for b in bots_data.values())):
-            waf_name = next(
-                (b.get("waf") or b.get("mechanism") for b in bots_data.values() if b.get("waf") or (b.get("mechanism") and b.get("mechanism") != "NONE")),
-                global_waf or "WAF"
+            is_blocked = bot_info.get("blocked", False) or verdict == "BLOCKED"
+            is_challenged = verdict == "CHALLENGED"
+            is_inconclusive = (
+                verdict == "INCONCLUSIVE" or
+                (status == 403 and not is_blocked and not is_challenged)
             )
-            penalties.append({
-                "category": "Anti-Bot & WAF",
-                "factor": f"Anti-Bot Shield Challenge ({waf_name})",
-                "penalty": -cls.PENALTY_WAF_CHALLENGE,
-                "severity": "CRITICAL",
-                "detail": f"Automated JS challenge / managed rule ({waf_name}) intercepts AI crawlers."
-            })
-            score -= cls.PENALTY_WAF_CHALLENGE
 
-        # 3. CAPTCHA Detection
-        has_captcha = global_captcha or any(
-            b.get("captcha", False) or
-            any("turnstile" in s.lower() or "captcha" in s.lower() for s in b.get("signals", []))
-            for b in bots_data.values()
+            # WAF: explicit waf field OR a named mechanism (not generic HTTP codes)
+            _mech_is_waf = (
+                mechanism not in ("NONE", "", "HTTP_FORBIDDEN",
+                                   "HTTP_429_RATE_LIMITED", "INCONCLUSIVE")
+                and "HTTP" not in mechanism
+            )
+            has_waf = bool(bot_info.get("waf")) or _mech_is_waf
+
+            has_captcha = bool(bot_info.get("captcha")) or any(
+                ("captcha" in s.lower() or "turnstile" in s.lower() or
+                 "challenge" in s.lower())
+                for s in bot_info.get("signals", [])
+            )
+            waf_name = (
+                bot_info.get("waf") or
+                (mechanism if _mech_is_waf else None)
+            )
+
+            # Assign event (highest severity first)
+            if status == 429:
+                event_type = "RATE_LIMITED"
+            elif status is not None and status >= 500:
+                event_type = "SERVER_ERROR"
+            elif (is_blocked or is_challenged) and has_captcha:
+                event_type = "CAPTCHA_BLOCK"
+            elif (is_blocked or is_challenged) and has_waf:
+                event_type = "WAF_BLOCK"
+            elif is_blocked or is_challenged:
+                event_type = "BLOCK"
+            elif is_inconclusive and status == 403:
+                event_type = "INCONCLUSIVE_403"
+            else:
+                event_type = "ACCESSIBLE"
+
+            bot_events[bot_name] = {
+                "event_type": event_type,
+                "status": status,
+                "verdict": verdict,
+                "mechanism": mechanism,
+                "has_waf": has_waf,
+                "has_captcha": has_captcha,
+                "waf_name": waf_name,
+            }
+
+        # ====================================================================
+        # STEP 2: ACCESS DENIAL PENALTIES — one compound penalty per group.
+        # HTTP 403 + WAF from the same event = ONE penalty, not two.
+        # ====================================================================
+        captcha_bots = [
+            b for b, e in bot_events.items() if e["event_type"] == "CAPTCHA_BLOCK"
+        ]
+        waf_bots = [
+            b for b, e in bot_events.items() if e["event_type"] == "WAF_BLOCK"
+        ]
+        plain_blocked_bots = [
+            b for b, e in bot_events.items() if e["event_type"] == "BLOCK"
+        ]
+        inconclusive_403_bots = [
+            b for b, e in bot_events.items() if e["event_type"] == "INCONCLUSIVE_403"
+        ]
+        rate_limited_bots = [
+            b for b, e in bot_events.items() if e["event_type"] == "RATE_LIMITED"
+        ]
+        server_error_bots = [
+            b for b, e in bot_events.items() if e["event_type"] == "SERVER_ERROR"
+        ]
+        # All confirmed-denied bots (used for discrimination check)
+        access_denied_bots = captcha_bots + waf_bots + plain_blocked_bots
+
+        # 2a. CAPTCHA block (absorbs HTTP 403 + CAPTCHA evidence — single penalty)
+        if captcha_bots:
+            waf_names = sorted({
+                bot_events[b]["waf_name"] for b in captcha_bots
+                if bot_events[b]["waf_name"]
+            })
+            waf_detail = f" via {', '.join(waf_names)}" if waf_names else ""
+            _pts = cls.PENALTY_CAPTCHA
+            penalties.append({
+                "category": "Access Denial",
+                "factor": f"CAPTCHA / Turnstile Block{waf_detail}",
+                "reason": (
+                    f"AI crawlers intercepted by interactive CAPTCHA/Turnstile{waf_detail}. "
+                    f"HTTP status + challenge evidence confirm one compound event."
+                ),
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "CRITICAL",
+                "detail": (
+                    f"Headless AI agents cannot solve interactive challenges. "
+                    f"Affects: {', '.join(captcha_bots)}"
+                ),
+                "evidence": [
+                    f"{b}: HTTP {bot_events[b]['status']} verdict={bot_events[b]['verdict']}"
+                    for b in captcha_bots
+                ],
+            })
+
+        # 2b. WAF block (absorbs HTTP 403 + WAF fingerprint — single penalty)
+        if waf_bots:
+            waf_names = sorted({
+                bot_events[b]["waf_name"] for b in waf_bots
+                if bot_events[b]["waf_name"]
+            })
+            waf_str = f" ({', '.join(waf_names)})" if waf_names else ""
+            _pts = cls.PENALTY_WAF_CHALLENGE
+            penalties.append({
+                "category": "Access Denial",
+                "factor": f"WAF / Anti-Bot Shield Block{waf_str}",
+                "reason": (
+                    f"WAF managed rules deny AI crawler access{waf_str}. "
+                    f"HTTP status + WAF fingerprint confirm one compound event."
+                ),
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "CRITICAL",
+                "detail": (
+                    f"WAF challenge/block intercepts AI crawlers without bypass. "
+                    f"Affects: {', '.join(waf_bots)}"
+                ),
+                "evidence": [
+                    f"{b}: HTTP {bot_events[b]['status']} mechanism={bot_events[b]['mechanism']}"
+                    for b in waf_bots
+                ],
+            })
+
+        # 2c. Plain block (no WAF/CAPTCHA evidence)
+        if plain_blocked_bots:
+            _pts = cls.PENALTY_HTTP_403
+            penalties.append({
+                "category": "Access Denial",
+                "factor": "HTTP Access Denied (No Challenge Signature)",
+                "reason": (
+                    "AI crawlers denied access. HTTP 403 or blocked verdict "
+                    "without specific WAF/CAPTCHA evidence."
+                ),
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "CRITICAL",
+                "detail": (
+                    f"AI crawlers received explicit access denial. "
+                    f"Affects: {', '.join(plain_blocked_bots)}"
+                ),
+                "evidence": [
+                    f"{b}: HTTP {bot_events[b]['status']} verdict={bot_events[b]['verdict']}"
+                    for b in plain_blocked_bots
+                ],
+            })
+
+        # 2d. Inconclusive 403
+        if inconclusive_403_bots:
+            _pts = 15
+            penalties.append({
+                "category": "Access Concern",
+                "factor": "HTTP 403 \u2014 Inconclusive (No Challenge Evidence)",
+                "reason": (
+                    "HTTP 403 returned without definitive WAF/bot-shield signatures. "
+                    "Preserved as INCONCLUSIVE per zero-hallucination policy."
+                ),
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "HIGH",
+                "detail": (
+                    f"Access uncertain \u2014 system will NOT fabricate a block claim without concrete evidence. "
+                    f"Affects: {', '.join(inconclusive_403_bots)}"
+                ),
+                "evidence": [
+                    f"{b}: HTTP 403 verdict=INCONCLUSIVE" for b in inconclusive_403_bots
+                ],
+            })
+
+        # 2e. Rate limiting
+        if rate_limited_bots:
+            _pts = cls.PENALTY_HTTP_429
+            penalties.append({
+                "category": "Rate Limiting",
+                "factor": "HTTP 429 Too Many Requests",
+                "reason": "AI crawl budget throttled by server-side rate limiting.",
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "HIGH",
+                "detail": (
+                    f"Rate limiting reduces AI crawl frequency. "
+                    f"Affects: {', '.join(rate_limited_bots)}"
+                ),
+                "evidence": [f"{b}: HTTP 429" for b in rate_limited_bots],
+            })
+
+        # 2f. Server errors
+        if server_error_bots:
+            _pts = cls.PENALTY_HTTP_5XX
+            penalties.append({
+                "category": "Server Errors",
+                "factor": "HTTP 5xx Server Error",
+                "reason": "Server failures encountered during crawl attempt.",
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "HIGH",
+                "detail": (
+                    f"Server errors prevent AI indexing. "
+                    f"Affects: {', '.join(server_error_bots)}"
+                ),
+                "evidence": [
+                    f"{b}: HTTP {bot_events[b]['status']}" for b in server_error_bots
+                ],
+            })
+
+        # ====================================================================
+        # STEP 3: SELECTIVE AI DISCRIMINATION
+        # ONLY fires when a REAL browser baseline was collected.
+        # ====================================================================
+        if has_real_baseline:
+            browser_ok = (
+                browser_data.get("status") == 200 and
+                not browser_data.get("blocked", False)
+            )
+            if browser_ok and access_denied_bots:
+                _pts = cls.PENALTY_AI_DISCREPANCY
+                penalties.append({
+                    "category": "Selective AI Discrimination",
+                    "factor": "Selective AI Crawler Blocking",
+                    "reason": (
+                        "Site serves human browsers (HTTP 200) but denies AI crawlers. "
+                        "Evidence of deliberate AI discrimination."
+                    ),
+                    "penalty": -_pts,
+                    "points_deducted": _pts,
+                    "severity": "CRITICAL",
+                    "detail": (
+                        f"Browser baseline: HTTP {browser_data.get('status')} (accessible). "
+                        f"AI crawlers denied: {', '.join(access_denied_bots[:3])}"
+                        + (f" (+{len(access_denied_bots)-3} more)" if len(access_denied_bots) > 3 else "")
+                    ),
+                    "evidence": [
+                        f"Browser: HTTP {browser_data.get('status')}",
+                        f"Blocked AI: {', '.join(access_denied_bots)}",
+                    ],
+                })
+        elif selective_ai_block:
+            # Explicitly flagged upstream (e.g. crawl_with_baseline_sync)
+            _pts = cls.PENALTY_AI_DISCREPANCY
+            penalties.append({
+                "category": "Selective AI Discrimination",
+                "factor": "Selective AI Blocking (Reported by Crawler)",
+                "reason": (
+                    "Crawler reported selective AI blocking based on "
+                    "differential response evidence."
+                ),
+                "penalty": -_pts,
+                "points_deducted": _pts,
+                "severity": "CRITICAL",
+                "detail": (
+                    "Site differentiates between human browsers and AI crawler "
+                    "user-agents."
+                ),
+                "evidence": ["selective_ai_block_detected=True reported by crawler"],
+            })
+
+        # ====================================================================
+        # STEP 4: ROBOTS.TXT
+        # ====================================================================
+        robots_ai_disallowed = (
+            robots_data.get("ai_disallowed", False) or
+            (robots_data.get("is_allowed") is False)
         )
-        if has_captcha:
-            penalties.append({
-                "category": "Anti-Bot & WAF",
-                "factor": "Interactive CAPTCHA / Turnstile",
-                "penalty": -cls.PENALTY_CAPTCHA,
-                "severity": "CRITICAL",
-                "detail": "Headless AI agents cannot solve visual/interactive challenges and abandon crawl."
-            })
-            score -= cls.PENALTY_CAPTCHA
-
-        # 4. AI-Specific Failure / Discrepancy (Browser 200 vs AI Bot Block)
-        browser_ok = browser_data.get("status") == 200 and not browser_data.get("blocked", False)
-        ai_blocked_while_browser_ok = selective_ai_block or (browser_ok and len(blocked_bots) > 0)
-        if ai_blocked_while_browser_ok:
-            penalties.append({
-                "category": "AI Crawler Parity",
-                "factor": "AI Bot Discrepancy (Browser 200 vs Bot 403)",
-                "penalty": -cls.PENALTY_AI_DISCREPANCY,
-                "severity": "CRITICAL",
-                "detail": "Site serves human visitors normally but selectively blocks generative AI search crawlers."
-            })
-            score -= cls.PENALTY_AI_DISCREPANCY
-
-        # 5. Robots.txt Check (RFC 9309 Compliance)
-        robots_ai_disallowed = robots_data.get("ai_disallowed", False) or (robots_data.get("is_allowed") is False)
         if robots_ai_disallowed:
-            matching_rule = robots_data.get("matching_rule") or robots_data.get("details") or "Disallow: /"
+            matching_rule = (
+                robots_data.get("matching_rule") or
+                robots_data.get("details") or
+                "Disallow: /"
+            )
+            _pts = cls.PENALTY_ROBOTS_AI_BLOCKED
             penalties.append({
                 "category": "Robots.txt Policy",
                 "factor": "Robots.txt AI Crawl Disallow",
-                "penalty": -cls.PENALTY_ROBOTS_AI_BLOCKED,
+                "reason": "robots.txt explicitly disallows AI crawler indexing.",
+                "penalty": -_pts,
+                "points_deducted": _pts,
                 "severity": "MEDIUM",
-                "detail": f"Robots.txt policy instructs AI search agents not to index ({matching_rule})."
+                "detail": (
+                    f"Robots.txt instructs AI search agents not to index. "
+                    f"Rule: {matching_rule}"
+                ),
+                "evidence": [f"Matching directive: {matching_rule}"],
             })
-            score -= cls.PENALTY_ROBOTS_AI_BLOCKED
 
-        # 6. Latency Check
+        # ====================================================================
+        # STEP 5: LATENCY
+        # ====================================================================
         high_latency_bots = [
             b for b, data in bots_data.items()
-            if data.get("latency_ms", 0) > 3000
+            if (data.get("latency_ms") or 0) > 3000
         ]
-        if high_latency_bots or browser_data.get("latency_ms", 0) > 3000:
+        browser_slow = (browser_data.get("latency_ms") or 0) > 3000
+        if high_latency_bots or browser_slow:
+            _pts = cls.PENALTY_HIGH_LATENCY
             penalties.append({
                 "category": "Performance",
                 "factor": "High Response Latency (> 3.0s)",
-                "penalty": -cls.PENALTY_HIGH_LATENCY,
+                "reason": "High response latency degrades AI crawl budget efficiency.",
+                "penalty": -_pts,
+                "points_deducted": _pts,
                 "severity": "LOW",
-                "detail": f"Slow response degrades AI crawl budget: {', '.join(high_latency_bots) if high_latency_bots else 'Server'}"
+                "detail": (
+                    f"Slow responses reduce AI crawl frequency. "
+                    f"Affected: {', '.join(high_latency_bots) if high_latency_bots else 'baseline server'}"
+                ),
+                "evidence": (
+                    [f"{b}: {bots_data[b].get('latency_ms')}ms" for b in high_latency_bots]
+                    or [f"Server: {browser_data.get('latency_ms')}ms"]
+                ),
             })
-            score -= cls.PENALTY_HIGH_LATENCY
 
-        # Clamp score between 0 and 100
-        final_score = max(0, min(100, score))
+        # ====================================================================
+        # FINALIZE — total_deductions = sum(points_deducted) always
+        # ====================================================================
+        total_deductions = sum(p["points_deducted"] for p in penalties)
+        final_score = max(0, min(100, cls.BASE_SCORE - total_deductions))
 
-        # Determine grade, risk level, and visual badge status
-        grade, status, color = cls._get_grade(final_score)
+        grade, status_str, color = cls._get_grade(final_score)
         risk_level = cls._get_risk_level(final_score)
 
-        # Build human-readable explainable reasons list
         reasons = [
             f"[{p['severity']}] {p['factor']}: {p['detail']} ({p['penalty']} pts)"
             for p in penalties
         ]
         if not reasons:
-            reasons = ["No critical access barriers detected. Website is accessible to AI search crawlers."]
+            reasons = [
+                "No critical access barriers detected. "
+                "Website is accessible to AI search crawlers."
+            ]
 
-        # Aggregate metrics from crawl findings
         primary_bot = next(iter(bots_data.values()), {})
         metrics = {
-            "http_status": primary_bot.get("status", browser_data.get("status", 200)),
-            "response_time_ms": primary_bot.get("latency_ms", browser_data.get("latency_ms", 0)),
+            "http_status": primary_bot.get("status"),
+            "response_time_ms": primary_bot.get("latency_ms", 0),
             "verdict": primary_bot.get("verdict", "ACCESSIBLE"),
             "mechanism": primary_bot.get("mechanism", "NONE"),
             "confidence": primary_bot.get("confidence", 0.0),
             "robots_allowed": robots_data.get("is_allowed", not robots_ai_disallowed),
-            "selective_block_detected": selective_ai_block,
+            "selective_block_detected": selective_ai_block or bool(
+                access_denied_bots and has_real_baseline
+            ),
             "page_text_length": primary_bot.get("text_length", 0),
         }
 
@@ -239,14 +414,14 @@ class ScoringEngine:
             "score": final_score,
             "grade": grade,
             "risk_level": risk_level,
-            "status": status,
+            "status": status_str,
             "color": color,
             "reasons": reasons,
             "metrics": metrics,
             "base_score": cls.BASE_SCORE,
-            "total_deductions": cls.BASE_SCORE - final_score,
+            "total_deductions": total_deductions,
             "penalties": penalties,
-            "summary": cls._build_summary(final_score, penalties)
+            "summary": cls._build_summary(final_score, penalties),
         }
 
     @staticmethod
@@ -273,7 +448,7 @@ class ScoringEngine:
         if not isinstance(audit_data, dict):
             return {
                 "bots": {},
-                "browser": {"status": 200, "latency_ms": 100},
+                "browser": {"status": None, "latency_ms": 0, "is_real": False},
                 "robots_txt": {"is_allowed": True},
                 "waf_detected": None,
                 "captcha_detected": False,
@@ -295,48 +470,62 @@ class ScoringEngine:
                 "selective_ai_block_detected": audit_data.get("selective_ai_block_detected", False),
             }
 
-        # Case 2: Direct single Anshul CrawlResult dict
+        # Case 2: Direct single Anshul CrawlResult dict (no real baseline available)
         if "detection" in audit_data and "http" in audit_data:
             bot_entry = cls._extract_single_bot(audit_data)
             persona_name = audit_data.get("persona", "gptbot")
             return {
                 "bots": {persona_name: bot_entry},
-                "browser": {"status": 200, "latency_ms": 150},
+                # No real browser baseline — do NOT fabricate 200 OK
+                "browser": {"status": None, "latency_ms": 0, "is_real": False},
                 "robots_txt": audit_data.get("robots_txt", {}),
                 "waf_detected": bot_entry.get("waf"),
                 "captcha_detected": bot_entry.get("captcha", False),
                 "selective_ai_block_detected": False,
             }
 
-        # Case 3: List of results (e.g. crawl_all_personas) wrapped in a dict or raw
+        # Case 3: List of results (e.g. crawl_all_personas) wrapped in a dict
         if "results" in audit_data and isinstance(audit_data["results"], list):
             bots = {}
-            browser = {"status": 200, "latency_ms": 150}
-            robots_txt = {}
+            # Start with no real baseline — only upgrade if standard_browser found
+            browser: Dict[str, Any] = {"status": None, "latency_ms": 0, "is_real": False}
+            robots_txt: Dict[str, Any] = {}
             for item in audit_data["results"]:
                 p = item.get("persona", "unknown")
                 entry = cls._extract_single_bot(item)
                 if p == "standard_browser":
-                    browser = entry
+                    browser = dict(entry)
+                    browser["is_real"] = True
                 else:
                     bots[p] = entry
                 if item.get("robots_txt") and not robots_txt:
                     robots_txt = item.get("robots_txt")
             global_waf = next((b.get("waf") for b in bots.values() if b.get("waf")), None)
             global_cap = any(b.get("captcha") for b in bots.values())
+            has_real = browser.get("is_real", False)
+            selective = (
+                has_real and
+                browser.get("status") == 200 and
+                any(b.get("blocked") for b in bots.values())
+            )
             return {
                 "bots": bots,
                 "browser": browser,
                 "robots_txt": robots_txt,
                 "waf_detected": global_waf,
                 "captcha_detected": global_cap,
-                "selective_ai_block_detected": any(b.get("blocked") for b in bots.values()) and browser.get("status") == 200,
+                "selective_ai_block_detected": selective,
             }
 
-        # Case 4: Standard legacy dictionary format
+        # Case 4: Standard legacy / aggregate dict format
+        browser = audit_data.get("browser", {"status": None, "latency_ms": 0, "is_real": False})
+        # If is_real not specified, infer from whether status is an actual int
+        if "is_real" not in browser:
+            browser = dict(browser)
+            browser["is_real"] = isinstance(browser.get("status"), int) and browser.get("status") is not None
         return {
             "bots": audit_data.get("bots", {}),
-            "browser": audit_data.get("browser", {"status": 200, "latency_ms": 150}),
+            "browser": browser,
             "robots_txt": audit_data.get("robots_txt", {}),
             "waf_detected": audit_data.get("waf_detected"),
             "captcha_detected": audit_data.get("captcha_detected", False),

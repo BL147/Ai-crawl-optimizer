@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="CineStream - Watch award-winning original series, blockbuster movies, and documentaries in 4K Ultra HD.">
+  <meta name="keywords" content="streaming, movies, 4K, tv series, documentaries, entertainment">
+  <meta name="robots" content="index, follow">
+  <title>CineStream - Watch TV Shows Online, Watch Movies Online</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+  <!-- Navigation Bar -->
+  <header class="navbar">
+    <div class="nav-left">
+      <a href="/" class="logo">
+        <span class="logo-icon">▶</span>
+        <span>CineStream</span>
+      </a>
+      <ul class="nav-links">
+        <li><a href="/" class="active">Home</a></li>
+        <li><a href="#series">Series</a></li>
+        <li><a href="#movies">Movies</a></li>
+        <li><a href="#popular">New & Popular</a></li>
+        <li><a href="#mylist">My List</a></li>
+      </ul>
+    </div>
+    <div class="nav-right">
+      <button class="nav-btn-icon" title="Search">🔍</button>
+      <button class="nav-btn-icon" title="Notifications">🔔</button>
+      <a href="/login" class="btn-signin">Sign In</a>
+    </div>
+  </header>
+
+  <!-- Hero Banner -->
+  <section class="hero">
+    <div class="hero-content">
+      <div class="hero-badge">
+        <span>★</span> #1 in Trending Sci-Fi Today
+      </div>
+      <h1 class="hero-title">Shadow Protocol:<br>Genesis</h1>
+      <div class="hero-meta">
+        <span class="match-rate">99% Match</span>
+        <span class="quality-badge">4K ULTRA HD</span>
+        <span class="age-badge">16+</span>
+        <span>2h 18m</span>
+        <span>Cyberpunk • Thriller</span>
+      </div>
+      <p class="hero-desc">
+        When an elite autonomous intelligence network breaks through defensive firewalls, 
+        a covert syndicate races across orbital sectors to secure the final decrypted core 
+        before global infrastructure goes dark.
+      </p>
+      <div class="hero-actions">
+        <button id="hero-play" class="btn-primary">
+          <span>▶</span> Play Now
+        </button>
+        <button id="hero-info" class="btn-secondary">
+          <span>ℹ</span> More Info
+        </button>
+      </div>
+    </div>
+  </section>
+
+  <!-- Live Presentation Control Bar -->
+  <div class="demo-bar">
+    <div class="demo-status">
+      {% if is_blocked %}
+        <span class="status-dot red"></span>
+        <span>AI Crawler Mode: <strong style="color: #e50914;">BLOCKED (HTTP 403)</strong></span>
+      {% else %}
+        <span class="status-dot green"></span>
+        <span>AI Crawler Mode: <strong style="color: #46d369;">ACCESSIBLE (HTTP 200)</strong></span>
+      {% endif %}
+    </div>
+    <div class="demo-instruction">
+      <span>Audit URL: <code>http://localhost:{{ port }}</code></span>
+      <span>• Toggle in <code>app.py</code>: <code>BLOCK_AI_BOTS = {{ not is_blocked }}</code></span>
+    </div>
+  </div>
+
+  <!-- Main Media Content Rows -->
+  <main class="main-content">
+
+    <!-- Row 1: Top Trending Originals -->
+    <section class="row-section" id="popular">
+      <div class="row-header">
+        <h2 class="row-title">Top Trending Originals</h2>
+        <a href="#all" class="row-more">Explore All ›</a>
+      </div>
+      <div class="card-grid">
+        <article class="media-card">
+          <div class="card-visual art-1">
+            <span class="card-tag">Original</span>
+            <div class="card-info">
+              <h3 class="card-title">Chronos Drift</h3>
+              <div class="card-meta">
+                <span class="card-match">98% Match</span>
+                <span>Season 2</span>
+                <span class="quality-badge">4K</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="media-card">
+          <div class="card-visual art-2">
+            <span class="card-tag">New Release</span>
+            <div class="card-info">
+              <h3 class="card-title">Deep Horizon 2099</h3>
+              <div class="card-meta">
+                <span class="card-match">96% Match</span>
+                <span>1h 54m</span>
+                <span class="quality-badge">HDR</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="media-card">
+          <div class="card-visual art-3">
+            <span class="card-tag">Award Winner</span>
+            <div class="card-info">
+              <h3 class="card-title">Apex Syndicate</h3>
+              <div class="card-meta">
+                <span class="card-match">95% Match</span>
+                <span>Season 1</span>
+                <span class="quality-badge">4K</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="media-card">
+          <div class="card-visual art-4">
+            <span class="card-tag">Top 10</span>
+            <div class="card-info">
+              <h3 class="card-title">Neural Odyssey</h3>
+              <div class="card-meta">
+                <span class="card-match">93% Match</span>
+                <span>2h 10m</span>
+                <span class="quality-badge">5.1</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <!-- Row 2: Critically Acclaimed Sci-Fi -->
+    <section class="row-section" id="movies">
+      <div class="row-header">
+        <h2 class="row-title">Critically Acclaimed Sci-Fi & Thrillers</h2>
+        <a href="#all" class="row-more">Explore All ›</a>
+      </div>
+      <div class="card-grid">
+        <article class="media-card">
+          <div class="card-visual art-5">
+            <span class="card-tag">Popular</span>
+            <div class="card-info">
+              <h3 class="card-title">Sub-Zero Frontier</h3>
+              <div class="card-meta">
+                <span class="card-match">97% Match</span>
+                <span>1h 48m</span>
+                <span class="quality-badge">4K</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="media-card">
+          <div class="card-visual art-6">
+            <span class="card-tag">Trending</span>
+            <div class="card-info">
+              <h3 class="card-title">Quantum Reckoning</h3>
+              <div class="card-meta">
+                <span class="card-match">94% Match</span>
+                <span>Season 3</span>
+                <span class="quality-badge">HDR</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="media-card">
+          <div class="card-visual art-1">
+            <span class="card-tag">Action</span>
+            <div class="card-info">
+              <h3 class="card-title">Aero-Rift</h3>
+              <div class="card-meta">
+                <span class="card-match">91% Match</span>
+                <span>2h 05m</span>
+                <span class="quality-badge">4K</span>
+              </div>
+            </div>
+          </div>
+        </article>
+
+        <article class="media-card">
+          <div class="card-visual art-2">
+            <span class="card-tag">Mystery</span>
+            <div class="card-info">
+              <h3 class="card-title">The Silent Node</h3>
+              <div class="card-meta">
+                <span class="card-match">96% Match</span>
+                <span>Limited Series</span>
+                <span class="quality-badge">HDR</span>
+              </div>
+            </div>
+          </div>
+        </article>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Footer -->
+  <footer class="footer">
+    <div class="footer-top">
+      <p>Questions? Call <a href="tel:18005550199">1-800-STREAM-DEMO</a></p>
+    </div>
+    <ul class="footer-links">
+      <li><a href="#">FAQ</a></li>
+      <li><a href="#">Help Center</a></li>
+      <li><a href="#">Account</a></li>
+      <li><a href="#">Media Center</a></li>
+      <li><a href="#">Investor Relations</a></li>
+      <li><a href="#">Jobs</a></li>
+      <li><a href="#">Ways to Watch</a></li>
+      <li><a href="#">Terms of Use</a></li>
+      <li><a href="#">Privacy</a></li>
+      <li><a href="#">Cookie Preferences</a></li>
+      <li><a href="#">Corporate Information</a></li>
+      <li><a href="#">Contact Us</a></li>
+    </ul>
+    <p class="footer-copy">© 2026 CineStream Demo Platform • Simulated Target for AI Crawl Optimizer Audit</p>
+  </footer>
+
+  <!-- Toast Notification -->
+  <div id="demo-toast" class="toast">Action Triggered</div>
+
+  <script src="/static/script.js"></script>
+</body>
+</html>

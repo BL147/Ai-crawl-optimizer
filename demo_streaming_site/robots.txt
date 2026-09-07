@@ -1,0 +1,13 @@
+# CineStream Platform Robots Policy
+User-agent: *
+Allow: /
+
+User-agent: GPTBot
+Disallow: /exclusive/
+Disallow: /originals/
+Crawl-delay: 5
+
+User-agent: ClaudeBot
+Disallow: /exclusive/
+
+Sitemap: http://localhost:5050/sitemap.xml
