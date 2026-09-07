@@ -21,7 +21,7 @@ class RemediationEngine:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        model: str = "gemini-1.5-flash",
+        model: str = "gemini-2.5-flash",
         timeout_seconds: float = 12.0,
     ):
         self.api_key = api_key or os.getenv("GEMINI_API_KEY")
